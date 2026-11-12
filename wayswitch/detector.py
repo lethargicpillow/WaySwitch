@@ -587,9 +587,28 @@ class Detector:
                     and lexicon.RU_LOWERCASE_COLLISIONS.get(a.text) == b.core.lower()):
                 return fix("dict-short-context", 0.8)
             return keep("dict-a", 1.0)
+        # A compound need not be an independent corpus entry. Keep exact
+        # known source components before considering the other layout.
+        def compound_parts(hyp):
+            if not hyp.valid or "-" not in hyp.core:
+                return []
+            parts = hyp.core.lower().split("-")
+            if not all(len(part) >= 2 and all(ch in LETTERS[hyp.lang] for ch in part)
+                       for part in parts):
+                return []
+            return [self.models[hyp.lang].is_word(part) for part in parts]
+
+        a_parts, b_parts = compound_parts(a), compound_parts(b)
+        if a_parts and all(a_parts):
+            return keep("dict-compound-a", 1.0)
         short = len(b.core) < sens.min_length
         if b.valid and b.in_dict and not short:
             return fix("dict-b", 1.0)
+        if b_parts and all(b_parts) and not any(a_parts):
+            return fix("dict-compound-b", 1.0)
+        # An unknown source component alongside a known one may be a project
+        # name or identifier. Do not use the new compound rule to override it;
+        # the ordinary n-gram policy below remains unchanged.
 
         # 8. Короткие слова — только частотные и только в контексте своего языка.
         if short:

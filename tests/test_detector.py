@@ -298,3 +298,40 @@ def test_conservative_preserves_uppercase_guard(det):
     det.sensitivity = SENSITIVITY["conservative"]
     result = det.decide(typed("THE", US), RU, US)
     assert result.action == "keep" and result.reason == "abbrev"
+
+
+def test_compound_exact_components_precede_ngrams(det):
+    det.models["ru"] = LanguageModel.from_words(
+        "ru", RU_WORDS + [("дефисы", 1), ("соединители", 1)], RU_ALPHABET)
+    keys = typed("ltabcs-cjtlbybntkb", US)
+    result = det.decide(keys, US, RU, ("en", "en"))
+    assert (result.action, result.target_text, result.reason) == (
+        "fix", "дефисы-соединители", "dict-compound-b")
+    assert not result.b.in_dict
+    assert det.decide(keys, RU, US).reason == "dict-compound-a"
+
+
+def test_compound_known_source_parts_win_even_with_known_target(det):
+    det.models["ru"] = LanguageModel.from_words(
+        "ru", RU_WORDS + [("дефисы", 1), ("соединители", 1)], RU_ALPHABET)
+    det.models["en"] = LanguageModel.from_words(
+        "en", EN_WORDS + [("ltabcs", 1), ("cjtlbybntkb", 1)], EN_ALPHABET)
+    result = det.decide(typed("ltabcs-cjtlbybntkb", US), US, RU)
+    assert (result.action, result.reason) == ("keep", "dict-compound-a")
+
+
+def test_compound_exception_and_technical_markers_precede_components(det):
+    det.models["ru"] = LanguageModel.from_words(
+        "ru", RU_WORDS + [("дефисы", 1), ("соединители", 1)], RU_ALPHABET)
+    det.exceptions.add("ltabcs-cjtlbybntkb")
+    assert det.decide(typed("ltabcs-cjtlbybntkb", US), US, RU).reason == "exception"
+    assert det.decide(typed("ltabcs--cjtlbybntkb", US), US, RU).reason == "tech"
+
+
+def test_compound_partial_source_match_does_not_force_component_fix(det):
+    det.models["ru"] = LanguageModel.from_words(
+        "ru", RU_WORDS + [("дефисы", 1), ("соединители", 1)], RU_ALPHABET)
+    det.models["en"] = LanguageModel.from_words(
+        "en", EN_WORDS + [("ltabcs", 1)], EN_ALPHABET)
+    result = det.decide(typed("ltabcs-cjtlbybntkb", US), US, RU)
+    assert result.reason != "dict-compound-b"

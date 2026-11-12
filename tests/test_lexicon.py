@@ -112,3 +112,15 @@ def test_pri_collision_preserves_conservative_and_exceptions(detector):
     assert conservative.decide(keys, US, RU, ("ru", "ru")).action == "keep"
     excluded = Detector(detector.keymap, detector.models, exceptions={"ghb"})
     assert excluded.decide(keys, US, RU, ("ru", "ru")).reason == "exception"
+
+
+@pytest.mark.parametrize("word,group", [
+    ("дефисы-соединители", RU), ("более-менее", RU), ("proof-of-concept", US),
+])
+def test_compound_layout_and_source_preservation(detector, word, group):
+    keys = keys_for_text(detector.keymap, word, group)
+    other = US if group == RU else RU
+    result = detector.decide(keys, group, other, (None, None))
+    assert result.action == "keep", result.reason
+    result = detector.decide(keys, other, group, (None, None))
+    assert (result.action, result.target_text) == ("fix", word), result.reason
