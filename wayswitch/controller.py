@@ -791,6 +791,15 @@ class Controller:
         same_window = old_window == snap.window
         if old is None or old == scope and same_window:
             return True
+        # A title is mutable metadata, not an editor identity. In Kate an
+        # unsaved document is named after its first line and its window name
+        # changes while typing. A confirmed field in the same generation
+        # remains the same input target. Preserve the LibreOffice title
+        # guard: its component identity and recreated Calc fields use it.
+        if (old == scope and snap.field is not None and protection is False
+                and snap.app.casefold() not in {"soffice", "soffice.bin", "libreoffice"}):
+            log.debug("привязка буфера сохранена: изменился только заголовок")
+            return True
         old_probe, _, old_field, old_app, old_protection = old
         # Редактор ячейки Calc создаётся заново на каждый вход, поэтому во
         # время набора поле успевает побывать None и смениться (grid → новый
@@ -823,8 +832,10 @@ class Controller:
             self._skip_word = self._lost_input
         else:
             self._skip_word |= bool(self.buffer.current_word()) or self._lost_input
-        log.debug("привязка буфера сброшена: поле изменилось=%s, пропуск=%s",
-                  changed_field, self._skip_word)
+        log.debug("привязка буфера сброшена: поле изменилось=%s, пропуск=%s, "
+                  "приложение=%s, поколение=%s→%s, заголовок изменился=%s, "
+                  "защита=%s→%s", changed_field, self._skip_word, snap.app,
+                  old[1], snap.generation, not same_window, old_protection, protection)
         self._provisional_binding = False
         self.buffer.reset()  # физически зажатые клавиши остаются учтены
         self._clear_context()

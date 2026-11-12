@@ -1837,6 +1837,87 @@ def test_verified_focus_wait_honors_cancellation(env, event):
     assert not env["corrected"]
 
 
+class RenamingEditorProbe(SafeProbe):
+    """Unsaved editor titles follow the first line without a focus change."""
+
+    def __init__(self, clock):
+        super().__init__(clock)
+        self.app = "kate"
+        self.field = (":1.1", "/document")
+        self.generation = 7
+        self.title = "Untitled — Kate"
+        self.password = False
+
+    def snapshot(self):
+        return FocusSnapshot(self.app, self.password, self.clock(), field=self.field,
+                             generation=self.generation, window=self.title)
+
+    def poke(self):
+        pass
+
+
+@pytest.mark.parametrize("app", ["kate", "editor"])
+@pytest.mark.parametrize("source,target,group", [
+    ("ghbdtn", "привет", US), ("руддщ", "hello", RU),
+])
+def test_mutable_window_title_does_not_discard_first_word(env, app, source, target, group):
+    ctrl = env["ctrl"]
+    probe = RenamingEditorProbe(env["clock"])
+    probe.app = app
+    ctrl.set_probe(probe)
+    env["backend"].current_index = group
+    queue = deferred(env)
+    for index, char in enumerate(source):
+        type_text(env, char)
+        # The AT-SPI window name changes after each first-line character.
+        probe.title = source[:index + 1] + " — Editor"
+    type_text(env, " ")
+    probe.title += " *"
+    drain(queue)
+    assert env["corrected"] == [(source, target, False)]
+    assert typed_text(env) == "\\b" * (len(source) + 1) + target + " "
+
+
+def test_kate_native_fix_survives_title_update_during_replacement(env):
+    ctrl = env["ctrl"]
+    probe = RenamingEditorProbe(env["clock"])
+    ctrl.set_probe(probe)
+
+    class RenamingNative(NativeTypist):
+        def replace_span(self, focus, source, target, begin, stop):
+            from wayswitch.editable import SpanResult
+            assert begin()
+            probe.title = "привет — Kate"
+            assert not stop()
+            self.native.append((source, target))
+            return SpanResult("done", True)
+
+    native = RenamingNative()
+    ctrl.typist = env["typist"] = native
+    type_text(env, "ghbdtn ")
+    assert native.native == [("ghbdtn ", "привет ")]
+    assert env["corrected"] == [("ghbdtn", "привет", False)]
+    assert not native.taps()
+
+
+@pytest.mark.parametrize("change", ["generation", "field", "password"])
+def test_title_change_never_hides_real_focus_change(env, change):
+    ctrl = env["ctrl"]
+    probe = RenamingEditorProbe(env["clock"])
+    ctrl.set_probe(probe)
+    type_text(env, "g")
+    probe.title = "Another document — Kate"
+    if change == "generation":
+        probe.generation += 1
+    elif change == "field":
+        probe.field = (":1.1", "/other")
+    else:
+        probe.password = True
+    type_text(env, "hbdtn ")
+    assert not env["corrected"]
+    assert not env["typist"].taps()
+
+
 def test_partial_word_never_crosses_writer_windows(env):
     class WindowsProbe(TwoFieldsProbe):
         def snapshot(self):
