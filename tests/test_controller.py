@@ -2106,3 +2106,67 @@ def test_kate_enter_queued_fix_rejects_new_input(env):
     drain(queue)
     assert not native.native and not native.taps()
     assert env["backend"].current() == US
+
+
+@pytest.mark.parametrize("source,target,group", [
+    ("ghbdtn!", "привет!", US),
+    ("ghbdtn/", "привет.", US),
+    ("ghbdtn?", "привет,", US),
+    ("руддщ!", "hello!", RU),
+    ("руддщ,", "hello?", RU),
+])
+def test_kate_punctuation_native_completion(env, source, target, group):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl.config.general.early_switch = False
+    env["backend"].set(group)
+    ctrl.typist = env["typist"] = native = NativeTypist()
+    type_text(env, source)
+    assert native.native == [(source, target)]
+    assert env["backend"].current() != group
+    assert not native.taps()
+    assert ctrl.buffer.is_empty()
+
+
+@pytest.mark.parametrize("source", ["hello!", "hello/", "hello?", "ghbdtn,", "ghbdtn[",
+                                    "ghbdtn1", "ghbdtn--", "hello/ghbdtn/"])
+def test_kate_punctuation_does_not_guess_letter_or_path(env, source):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl.config.general.early_switch = False
+    ctrl.typist = env["typist"] = native = NativeTypist()
+    type_text(env, source)
+    assert not native.native and not native.taps()
+    assert env["backend"].current() == US
+
+
+@pytest.mark.parametrize("app,enabled,decline", [
+    ("kate", False, False), ("editor", True, False), ("kate", True, True),
+])
+def test_punctuation_never_falls_back_to_keyboard(env, app, enabled, decline):
+    ctrl = env["ctrl"]
+    probe = RenamingEditorProbe(env["clock"])
+    probe.app = app
+    ctrl.set_probe(probe)
+    ctrl.config.general.early_switch = False
+    ctrl.config.general.punct_fix = enabled
+    ctrl.typist = env["typist"] = native = NativeTypist()
+    if decline:
+        native.replace_span = lambda *_: None
+    type_text(env, "ghbdtn!")
+    assert not native.native and not native.taps()
+    assert env["backend"].current() == US
+
+
+def test_punctuation_queue_rejects_later_input(env):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl.config.general.early_switch = False
+    ctrl.typist = env["typist"] = native = NativeTypist()
+    queue = deferred(env)
+    type_text(env, "ghbdtn!")
+    assert len(queue) == 1
+    tap(env, kc.KEY_LEFT)
+    drain(queue)
+    assert not native.native and not native.taps()
+    assert env["backend"].current() == US
