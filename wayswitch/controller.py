@@ -439,7 +439,9 @@ class Controller:
                 self._replay_focus_queue()
         if fresh is not None:
             self._focus_wake_attempted = False
+            log.debug("пробуждение фокуса: подтверждён")
             return "woke", fresh
+        log.debug("пробуждение фокуса: %s", why)
         if why == "cancelled":
             return "cancelled", None
         if recent_unknown:
@@ -588,6 +590,7 @@ class Controller:
             return
         if self._skip_word:
             if value == 1 and code == kc.KEY_SPACE:
+                log.debug("слово пропущено: буфер не подтверждён до границы слова")
                 self._skip_word = False
                 self.buffer.reset()
                 self._clear_context()
@@ -808,6 +811,8 @@ class Controller:
                  and (old_field is None or old_app is None
                       or same_window and _libreoffice_component(snap) == "calc"))
         if generation_only or carry:
+            log.debug("привязка буфера: нужна проверяемая замена (%s)",
+                      "поколение" if generation_only else "поздний фокус")
             self._provisional_binding = True
             return True
         changed_field = (old_probe is self.probe and old_protection is not None
@@ -818,6 +823,8 @@ class Controller:
             self._skip_word = self._lost_input
         else:
             self._skip_word |= bool(self.buffer.current_word()) or self._lost_input
+        log.debug("привязка буфера сброшена: поле изменилось=%s, пропуск=%s",
+                  changed_field, self._skip_word)
         self._provisional_binding = False
         self.buffer.reset()  # физически зажатые клавиши остаются учтены
         self._clear_context()
@@ -1591,6 +1598,7 @@ class Controller:
                     log.info("исправление %s отменено: фраза устарела", reason)
                     return
                 if not self._sync_focus() or self._buffer_focus != capture_focus:
+                    log.debug("исправление отменено: фокус изменился до исполнения")
                     return
                 if whole_phrase:
                     unchanged = self.buffer.phrase() == snapshot
@@ -1792,6 +1800,7 @@ class Controller:
             return False
         # До границы слова человек продолжает печатать: клавиатурная замена не атомарна.
         plan.require_verified = self._provisional_binding or reason in {"early", "url-early"}
+        log.debug("исполнение %s: проверяемая замена=%s", reason, plan.require_verified)
         original = (source_text if source_text is not None
                     else self.keymap.decode(keys, group_before))
         if self.dry_run:
@@ -1877,6 +1886,13 @@ class Controller:
                 self._clear_context()
             lost = False
         if result == ABORTED and not interrupted:
+            # Без записи в поле физические события снова принадлежат исходному
+            # буферу. Если за время отмены закончилось ещё одно слово, не теряем
+            # его границу. Исправляем только последнее слово у самой каретки.
+            can_retry_word = (not manual and not whole_phrase and not span
+                              and not self._provisional_binding
+                              and not self._skip_word
+                              and self.backend.current() == group_before)
             if self._provisional_binding:
                 # Буфер собран при неподтверждённой привязке. Если слово уже
                 # закончилось пробелом (tail), пропускать следующее нельзя:
@@ -1892,14 +1908,26 @@ class Controller:
             # допечатал. Досылаем эти нажатия в буфер с тем состоянием
             # зажатых клавиш, что было на входе, — как будто исправления не было.
             self.buffer.restore_held(self._busy_held)
+            next_word = None
             for code, value, device_id in busy_keys:
-                self.buffer.feed(code, value, device_id, self.clock())
+                event = self.buffer.feed(code, value, device_id, self.clock())
+                if event is not None:
+                    if event.reset_before or event.kind == "reset":
+                        self._clear_context()
+                        can_retry_word = False
+                    next_word = (list(event.keys), device_id, code) \
+                        if event.kind == "word" else None
             log.info("исправление %s: %s", reason, result)
             self.gesture.reset()
             self._pending_gesture = None
             self._pending_after = None
             if not outcome.get("expired"):
                 self._emit_status()
+            if (can_retry_word and next_word is not None
+                    and self._auto_allowed() and not self._skip_word
+                    and self.buffer.last_word_with_tail() == (next_word[0], 1)):
+                log.debug("обработка завершённого слова после отмены")
+                self._on_word(*next_word)
             return False
         if lost:
             self._last_fix = None

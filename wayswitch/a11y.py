@@ -219,8 +219,11 @@ class AtspiProbe:
             self._thread.start()
 
     def invalidate(self) -> None:
-        """Композитор сменил активное окно; старый снимок больше недействителен."""
+        """Смена фокуса: сбросить снимок и начать опрос до первой клавиши."""
         self._invalidate()
+        # В фоне опрос может уже спать. Одного _wake.set() тогда недостаточно:
+        # первая клавиша иначе вынуждена ждать запуска потока и свежего поля.
+        self.poke()
 
     def _invalidate(self) -> None:
         with self._lock:
@@ -262,7 +265,7 @@ class AtspiProbe:
                 if (self._watcher is None or self._watcher.query_connection is not connection
                         or not self._watcher.live.is_set()):
                     self._drop_watcher()
-                    self._watcher = _watch_focus_events(connection, self._invalidate)
+                    self._watcher = _watch_focus_events(connection, self.invalidate)
                 if not self._watcher.live.is_set():
                     raise RuntimeError("подписка at-spi потеряна")
             if self._stop.is_set():

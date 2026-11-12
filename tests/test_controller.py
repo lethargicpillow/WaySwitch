@@ -1086,6 +1086,24 @@ def test_key_typed_before_first_backspace_is_kept_in_buffer(env):
     assert [c for c, _ in env["typist"].taps()].count(kc.KEY_BACKSPACE) == len("gjrf ")
 
 
+def test_complete_next_word_during_clean_abort_is_processed(env):
+    # Весь следующий токен пришёл до первой стирающей клавиши.
+    # После безопасной отмены его пробел должен снова запустить детектор.
+    ctrl = env["ctrl"]
+
+    def next_word():
+        for ch in "gjrf ":
+            code, shift = env["km"].key_for(ch, US)
+            assert not shift
+            ctrl.on_key(code, 1, 1)
+            ctrl.on_key(code, 0, 1)
+
+    reenter_during_fix(env, next_word)
+    type_text(env, "ghbdtn ")
+    assert env["corrected"] == [("gjrf", "пока", False)]
+    assert [c for c, _ in env["typist"].taps()].count(kc.KEY_BACKSPACE) == len("gjrf ")
+
+
 def test_key_typed_after_first_backspace_skips_rest_of_word(env):
     # После точки невозврата буква легла посреди перепечатки: слово на экране
     # и в буфере разошлись — до пробела его не трогаем ни авто, ни жестом.

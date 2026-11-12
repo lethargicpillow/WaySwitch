@@ -1107,6 +1107,22 @@ def test_idle_worker_keeps_accessibility_enabled_until_close(monkeypatch, focus_
     assert focus_bus["closed"] == [focus_bus["connection"]]
 
 
+def test_focus_change_wakes_probe_before_first_key():
+    refreshed = threading.Event()
+
+    def query():
+        refreshed.set()
+        return ("Editor", False)
+
+    probe = a11y.AtspiProbe(query=query)
+    try:
+        assert probe._thread is None
+        probe.invalidate()
+        assert refreshed.wait(1.0)
+    finally:
+        probe.close(wait=True)
+
+
 def test_make_probe_respects_flag():
     assert isinstance(a11y.make_probe(False), a11y.NullProbe)
     probe = a11y.make_probe(True)
