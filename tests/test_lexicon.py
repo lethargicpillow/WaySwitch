@@ -83,3 +83,32 @@ def test_conservative_keeps_original_short_transition_policy(detector):
     keys = keys_for_text(detector.keymap, "на", RU)
     det = Detector(detector.keymap, detector.models, sensitivity=SENSITIVITY["conservative"])
     assert det.decide(keys, US, RU, ("en", "en")).action == "keep"
+
+
+@pytest.mark.parametrize("context", [
+    (None, None), ("ru", "ru"), (None, "en"), ("ru", "en"), ("en", "ru"),
+])
+def test_pri_lowercase_corpus_collision(detector, context):
+    keys = keys_for_text(detector.keymap, "ghb", US)
+    assert detector.models["en"].is_word("ghb")
+    decision = detector.decide(keys, US, RU, context)
+    assert decision.action == "fix", decision.reason
+    assert decision.target_text == "при"
+
+
+@pytest.mark.parametrize("word,context", [
+    ("GHB", (None, None)), ("GHB", ("ru", "ru")),
+    ("ghb", ("en", "en")), ("Ghb", ("ru", "ru")),
+])
+def test_ghb_acronym_and_english_context_are_protected(detector, word, context):
+    keys = keys_for_text(detector.keymap, word, US)
+    assert detector.decide(keys, US, RU, context).action == "keep"
+
+
+def test_pri_collision_preserves_conservative_and_exceptions(detector):
+    keys = keys_for_text(detector.keymap, "ghb", US)
+    conservative = Detector(detector.keymap, detector.models,
+                            sensitivity=SENSITIVITY["conservative"])
+    assert conservative.decide(keys, US, RU, ("ru", "ru")).action == "keep"
+    excluded = Detector(detector.keymap, detector.models, exceptions={"ghb"})
+    assert excluded.decide(keys, US, RU, ("ru", "ru")).reason == "exception"

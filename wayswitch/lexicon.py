@@ -76,6 +76,12 @@ RU_CONTEXT_COLLISIONS = {
     "j,": "об", "x`": "чё", "g;": "пж", "b[": "их", "t`": "её",
 }
 
+# Lowercase corpus acronyms that collide with a very common Russian word.
+# Allow the exact spelling in neutral/mixed context, but not after two
+# English words. Uppercase acronyms remain protected by Detector.decide.
+RU_LOWERCASE_COLLISIONS = {"ghb": "при"}
+
+
 # Short, common function words and unmistakable conversational forms may begin
 # a new language even after a sentence in the previous language. The source
 # must not be a dictionary word; all stop-rules in Detector.decide still apply.
