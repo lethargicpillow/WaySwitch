@@ -475,6 +475,8 @@ def _kde_guard(tree, focus, context, stopped):
                 return _ABORT
             if type(pid) is not int or pid <= 0:
                 return _ABORT
+            if context.window_epoch >= 0 and not a11y._same_application(pid, context.pid):
+                return _ABORT
             if stable_pid is None:
                 stable_pid = pid
             elif pid != stable_pid:
@@ -506,7 +508,9 @@ def try_replace_kde(focus, source, target, commit, stopped) -> SpanResult | None
         context = a11y.query_shell_context()
     except Exception:  # noqa: BLE001 — неизвестный контекст не разрешает попытку
         return SpanResult("aborted")
-    if context != a11y.ShellContext():
+    if (context is None or context.protected()
+            or (context != a11y.ShellContext()
+                and not (context.pid > 0 and context.window_epoch >= 0))):
         return SpanResult("aborted")
     connection = None
     attempted = False
