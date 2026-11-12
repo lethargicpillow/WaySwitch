@@ -1,9 +1,10 @@
 """Регрессии KWin PID-источника, без живого композитора."""
+
 import pytest
 
+from tests.test_focus import editable_tree
 from wayswitch import a11y
 from wayswitch.backends.kwin_focus import LEASE, FocusState
-from tests.test_focus import editable_tree
 
 
 class Clock:
@@ -37,7 +38,9 @@ def test_window_epoch_and_reordered_reports():
     assert state.accept(3, 1, 123) == (True, True)
     assert state.snapshot() != old
     assert state.accept(2, 0, 456) == (False, False)
-    assert state.accept(4, 1, 456) == (False, False)
+    # PID может появиться позже первого сообщения при создании окна.
+    assert state.accept(4, 1, 456) == (True, True)
+    assert state.snapshot().pid == 456
     assert state.accept(5, 2, 0) == (True, True)
     assert state.snapshot() is None
     assert state.accept(6, 3, 123) == (True, True)
@@ -87,3 +90,11 @@ def test_provider_lifecycle(monkeypatch):
     finally:
         a11y.set_context_provider(None)
     assert a11y.query_shell_context() == a11y.ShellContext()
+
+
+def test_late_pid_after_window_activation():
+    state = FocusState()
+    state.accept(1, 0, 0)
+    assert state.snapshot() is None
+    assert state.accept(2, 0, 123, True) == (True, True)
+    assert state.snapshot().pid == 123

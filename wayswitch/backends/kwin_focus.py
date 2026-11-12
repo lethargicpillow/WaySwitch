@@ -4,6 +4,7 @@ JS существует только в течение работы демона
 скрипта в профиль и подмена функций AT-SPI не нужны. Событие активации
 инвалидирует снимок, даже если два окна принадлежат одному PID.
 """
+
 from __future__ import annotations
 
 import json
@@ -25,9 +26,13 @@ BRIDGE_IFACE = "org.wayswitch.KWinFocus"
 LEASE = 1.8
 HEARTBEAT_MS = 450
 XML = """<node><interface name="org.wayswitch.KWinFocus">
-<method name="Report"><arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="s" direction="in"/></method>
-<method name="Heartbeat"><arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="s" direction="in"/></method>
-</interface></node>"""  # noqa: E501
+<method name="Report">
+  <arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="s" direction="in"/>
+</method>
+<method name="Heartbeat">
+  <arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="s" direction="in"/>
+</method>
+</interface></node>"""
 
 # Ответ на heartbeat задерживается на стороне Python, не в потоке KWin.
 # Передаём только PID, номер сообщения и поколение окна, никаких заголовков.
@@ -73,9 +78,6 @@ class FocusState:
         with self.lock:
             if seq <= self.seq or epoch < self.epoch or not 0 <= pid <= 2147483647:
                 return False, False
-            # Один epoch не может обозначать два окна с разными PID.
-            if epoch == self.epoch and pid != self.pid:
-                return False, False
             change = self.invalidated or (self.epoch, self.pid) != (epoch, pid)
             self.seq, self.epoch, self.pid = seq, epoch, pid
             self.last = self.clock()
@@ -92,7 +94,7 @@ class FocusState:
 
     def expire(self):
         with self.lock:
-            if not self.invalidated and self.last is not None and self.clock()-self.last > LEASE:
+            if not self.invalidated and self.last is not None and self.clock() - self.last > LEASE:
                 self.invalidated = True
                 return True
             return False
@@ -112,7 +114,7 @@ class FocusState:
 class KWinFocusBridge:
     """Сессионный D-Bus объект и временный KWin JS, с проверкой отправителя."""
 
-    def __init__(self, label="wayswitch-kwin-focus"):
+    def __init__(self, label="wayswitch-kwin-focus", *, exclusive=True):
         from gi.repository import Gio, GLib
 
         self.Gio, self.GLib = Gio, GLib
@@ -120,6 +122,8 @@ class KWinFocusBridge:
         self.state = FocusState()
         self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         self.label = label
+        self.exclusive = exclusive
+        self.owns_name = False
         self.owner = self._call("org.freedesktop.DBus", "/org/freedesktop/DBus",
                                 "org.freedesktop.DBus", "GetNameOwner",
                                 "(s)", (SERVICE,), "(s)")[0]
@@ -133,11 +137,11 @@ class KWinFocusBridge:
         self.replies = {}
 
     def _call(self, dest, path, iface, method, signature=None, args=(), reply=None):
-        g, l = self.Gio, self.GLib
-        value = l.Variant(signature, args) if signature else None
-        typ = l.VariantType.new(reply) if reply else None
+        gio, glib = self.Gio, self.GLib
+        value = glib.Variant(signature, args) if signature else None
+        typ = glib.VariantType.new(reply) if reply else None
         result = self.bus.call_sync(dest, path, iface, method, value, typ,
-                                    g.DBusCallFlags.NONE, 2500, None)
+                                    gio.DBusCallFlags.NONE, 2500, None)
         return result.unpack() if result is not None else ()
 
     def _timeout(self, ms, callback):
@@ -186,13 +190,22 @@ class KWinFocusBridge:
         return not self.closed
 
     def start(self):
-        g, l = self.Gio, self.GLib
-        self.node_info = g.DBusNodeInfo.new_for_xml(XML)
+        gio = self.Gio
+        if self.exclusive:
+            # Не выгружаем рабочий скрипт, если случайно запущен второй демон.
+            # DO_NOT_QUEUE: повторный экземпляр не сможет перехватить имя позже.
+            result = self._call("org.freedesktop.DBus", "/org/freedesktop/DBus",
+                                "org.freedesktop.DBus", "RequestName",
+                                "(su)", (BRIDGE_IFACE, 4), "(u)")[0]
+            if result != 1:
+                raise RuntimeError("another KWin focus bridge is running")
+            self.owns_name = True
+        self.node_info = gio.DBusNodeInfo.new_for_xml(XML)
         self.registration = self.bus.register_object(
             BRIDGE_PATH, self.node_info.interfaces[0], self._method, None, None)
         self.watch = self.bus.signal_subscribe(
             "org.freedesktop.DBus", "org.freedesktop.DBus", "NameOwnerChanged",
-            "/org/freedesktop/DBus", SERVICE, g.DBusSignalFlags.NONE, self._owner_changed)
+            "/org/freedesktop/DBus", SERVICE, gio.DBusSignalFlags.NONE, self._owner_changed)
         self.timer = self._timeout(200, self._watchdog)
         self.temp = tempfile.TemporaryDirectory(
             prefix="wayswitch-kwin-", dir=os.environ.get("XDG_RUNTIME_DIR"))
@@ -246,6 +259,14 @@ class KWinFocusBridge:
             self.bus.unregister_object(self.registration)
         if self.temp is not None:
             self.temp.cleanup()
+        if self.owns_name:
+            try:
+                self._call("org.freedesktop.DBus", "/org/freedesktop/DBus",
+                           "org.freedesktop.DBus", "ReleaseName",
+                           "(s)", (BRIDGE_IFACE,), "(u)")
+            except Exception:
+                pass
+            self.owns_name = False
 
 
 def query_active_focus():
@@ -258,7 +279,7 @@ def query_active_focus():
     context.push_thread_default()
     bridge = None
     try:
-        bridge = KWinFocusBridge(label=f"wayswitch-kwin-doctor-{os.getpid()}")
+        bridge = KWinFocusBridge(label=f"wayswitch-kwin-doctor-{os.getpid()}", exclusive=False)
         bridge.start()
         result = []
 
@@ -278,6 +299,8 @@ def query_active_focus():
     except Exception:
         return a11y.FocusSnapshot()
     finally:
-        if bridge is not None:
-            bridge.close()
-        context.pop_thread_default()
+        try:
+            if bridge is not None:
+                bridge.close()
+        finally:
+            context.pop_thread_default()
