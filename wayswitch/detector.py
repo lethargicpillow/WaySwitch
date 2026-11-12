@@ -15,7 +15,7 @@ from functools import cached_property
 from importlib import resources
 from pathlib import Path
 
-from wayswitch import ngram
+from wayswitch import lexicon, ngram
 from wayswitch.keymap import CYRILLIC, LATIN, Keymap
 
 LANG_OF_ALPHABET = {"ru": "ru", "latin": "en"}
@@ -152,7 +152,11 @@ class LanguageModel:
         with gzip.open(base / f"{lang}.words.gz", "rt", encoding="utf-8") as f:
             for line in f:
                 words.append(line.split("\t", 1)[0])
-        return cls(lang, words, words[:top_n], ngram.load(base / f"{lang}.ngrams.json.gz"))
+        # Keep corpus order/frequencies intact; supplement only dictionary lookup.
+        extra = lexicon.WORDS.get(lang, frozenset())
+        short = lexicon.SHORT.get(lang, frozenset())
+        return cls(lang, set(words) | extra, set(words[:top_n]) | short,
+                   ngram.load(base / f"{lang}.ngrams.json.gz"))
 
     def _lookup_key(self, text: str) -> str:
         """Ключ поиска: в ru «ё» и «е» равнозначны, в en — только регистр."""
@@ -562,6 +566,13 @@ class Detector:
 
         # 5. Словарь.
         if a.valid and a.in_dict:
+            # Explicit short collisions, not a general bypass of dict-a.
+            # The previous accepted word must already establish Russian context.
+            if (sens != SENSITIVITY["conservative"] and b.valid and b.in_dict
+                    and a.lang == "en" and b.lang == "ru" and context[-1] == "ru"
+                    and a.text == a.text.lower()
+                    and lexicon.RU_CONTEXT_COLLISIONS.get(a.core.lower()) == b.core.lower()):
+                return fix("dict-short-context", 0.8)
             return keep("dict-a", 1.0)
         short = len(b.core) < sens.min_length
         if b.valid and b.in_dict and not short:

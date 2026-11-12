@@ -1,0 +1,76 @@
+"""Curated vocabulary supplement for ordinary conversation (RU/EN).
+
+The shipped frequency corpus and n-gram weights remain unchanged. These
+entries are explicitly reviewed spellings, not synthetic frequency counts.
+A short-word collision is resolved only with established target-language
+context; normal English words and upper-case abbreviations are not overridden.
+"""
+
+RU_WORDS = frozenset((
+    "а ага ага-ага ай ай-ай апаю апдейт апнул апнуть ау афк ах ахах ахаха б баг баги "
+    "багфикс бб без благодаря блин блинский блинчики брр бы в вайб вам вапще вас вау ваще "
+    "вблизи ввиду вглубь вдали вдоль ведь видос видосик винда виндовый виндой винду включая "
+    "вместо вне внутри во возле вокруг вон вопреки вопще вот вп впн все вслед вследствие "
+    "всё вчерась вы гав гг где гл гм гуд да даа даже дебаг дебажить девайс девайсы для до "
+    "дык его едва ее ей если её ж же жестко жесть жиз жиза жоско жосткий жостко жёсткий "
+    "жёстко за завтр завтра запушить зато зафиксить зачем зачет зачот зачёт звин здарова "
+    "здорова здрасте здрасьте и ибо из извини изи изо или им имба имбовый имхо инет "
+    "интернет исключая итак их к кабы кайф кайфанул кайфово как какбы канеш канешн капец "
+    "касательно кек кекек ко когда коммит коммитить комп компик конечно конфа конфиг "
+    "конфиги конфы короч короче кринге кринж кроме крч кста кто куда лаг лагает лаги ладн "
+    "лан легчайший ли либо линукс линух лишь лол лолкек лул лулз ль мб мдя меж между мем "
+    "мемас мемасик мемчик мердж мерджить мерж мимо мне мну мня мобила мобилка мобилку мож "
+    "может можн мой мона мы мя мяу на навстречу над надоб надоть нам напротив нас насчет "
+    "насчёт начиная не неа немогу немож ненадо непонятки несмотря нзч ни низзя низя нинада "
+    "ниче ничо ничосе ничоси ничё ништяк но норм нормас нормик нормуль ноут ноутбук нп ну "
+    "ну-ну нуачо нуб нубас нубик нуу ня ням о об обо ого огонь ой ой-ой ок окей окейно "
+    "окейчик около он она они оно от откуда относительно ото отпад офигенно офигеть офк ох "
+    "оч очнь пасиб пасиба пасибо перед пж пжл пздц пинг пинги пипец плз плиз по поверх "
+    "погоди под пока помимо пон понял понятно поперек поперёк после посредством поч почем "
+    "почему ппц пред при прив приветик прикол прикольно про прога проги прокси против пулл "
+    "пускай пусть пуш пушить ради репа репозиторий рофл рофлить рофлишь рофлю с сабж сабжик "
+    "сам сама сами сверх свой сей сие сия сквозь скрин скринчик скриншот со согласно сори "
+    "сорри сорян софт софтина спасиб спасибки спасибочки спок спс спустя среди сча счас ся "
+    "сёдня сёня так также такс там твой те тебе тел телек телик тем тильт тильтанул тип "
+    "типо то тоже ток тока токс токсик только топчик тормозня треш трэш тут ты тьфу тя у "
+    "убунта убунту угу уж ура уф ух ухаха фига фигасе фигня фикс фиксить фича фичи фотка "
+    "фоточка фпс фу ха ха-ха хаха хех хз хихи хм хотя хоч хочу хош хошь хрен хрень хы че "
+    "че-нить чем ченить через чет чето чил чилить чилл чо чонить чот чото чрез что чтоб "
+    "чтобы чтоль чуток чё чё-нить чёт чёто шас шо шо-то шоб шото што штоб шустро шустрый ща "
+    "щаз щас щасик що щото щяс ых ыы ыыы эй эт эта это эх юзал юзать юзаю юзер юзеры я ёк "
+    "ёлки ёмаё ёпт "
+).split())
+
+EN_WORDS = frozenset((
+    "a aboard about above across afaik afk after against ah aight all along alongside alr "
+    "alright am amid among an any are around as asap at aw be before behind below beneath "
+    "beside between beyond brb bro bruh btw bug bugfix bugs but by can cause cheers commit "
+    "commits committing concerning config configs congrats cos coz cuz cya dang darn debug "
+    "debugger debugging def defs despite dev devs did do dokey dude dunno during eh except "
+    "fam feature features ffs for fps fr from ftw fyi geez gg gif gifs gimme gl gnome go "
+    "gonna gotcha gotta grats gz ha had hah haha hahaha hardware has he heh hehe her hey hf "
+    "hi him his hm hmm hotfix how huh i idk if imho imo in inside into irl is it jeez jk "
+    "kde kek kinda kubuntu lag laggy lags latency legit lemme linux lmao lmfao lol lolz lul "
+    "lulz may me meh meme memed memes merge merged merging my nah near newbie ngl no noob "
+    "nope not notwithstanding now np nvm obvs of off oh ok okay okey omg on one onto oof "
+    "oops or ouch our out outside over ow per ping pls plz pog probs prolly proxies proxy "
+    "pull pulls push pushed pushing regarding repo repos rip rly rn rofl she sheesh since "
+    "smh so software sorta soz srsly sry sup sus tbh thanks thanx the thnx tho through "
+    "throughout thru thx till tldr to too toward towards ttyl ttyt ty tyvm ubuntu ugh uh um "
+    "under underneath until up upon us versus via vpn wanna was wayland we whatcha whew who "
+    "whoa why with within without wow wtf xd ya yall yay ye yeah yeet yep yes yet yikes yo "
+    "you yup "
+).split())
+
+WORDS = {"ru": RU_WORDS, "en": EN_WORDS}
+SHORT = {lang: frozenset(w for w in words if 1 <= len(w) <= 3)
+         for lang, words in WORDS.items()}
+
+# Some corpus entries are rare Latin abbreviations rather than everyday
+# words. Permit these exact collisions only in established Russian context.
+# Never override common English words such as of, he, as, at, in or by.
+RU_CONTEXT_COLLISIONS = {
+    "bp": "из", "lj": "до", "cj": "со", "dj": "во", "rj": "ко",
+    "lf": "да", "ye": "ну", "ds": "вы", "ns": "ты", "tt": "ее",
+    "oj": "що", "jr": "ок", "ae": "фу", "fe": "ау",
+}
