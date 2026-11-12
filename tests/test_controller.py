@@ -1905,7 +1905,9 @@ def test_title_change_never_hides_real_focus_change(env, change):
     ctrl = env["ctrl"]
     probe = RenamingEditorProbe(env["clock"])
     ctrl.set_probe(probe)
-    type_text(env, "g")
+    queue = deferred(env)
+    type_text(env, "ghbdtn ")
+    assert len(queue) == 1
     probe.title = "Another document — Kate"
     if change == "generation":
         probe.generation += 1
@@ -1913,7 +1915,7 @@ def test_title_change_never_hides_real_focus_change(env, change):
         probe.field = (":1.1", "/other")
     else:
         probe.password = True
-    type_text(env, "hbdtn ")
+    drain(queue)
     assert not env["corrected"]
     assert not env["typist"].taps()
 
