@@ -2032,7 +2032,8 @@ class Controller:
                                  if native_boundary else self._native_append_count,
                                  native_focus=self._native_focus_snapshot,
                                  before_write=before_write if whole_phrase else None,
-                                 before_fallback=wait_trigger_for_fallback if native_space else None)
+                                 before_fallback=(wait_trigger_for_fallback
+                                                  if native_space else None))
         except Exception as exc:  # noqa: BLE001 — execute сам ловит, это страховка
             log.error("исправление %s: ошибка %s", reason, type(exc).__name__)
             result = "failed"

@@ -149,8 +149,11 @@ def main():
                 continue
             snapshot = bridge.state.snapshot()
             rows = []
-            worker = threading.Thread(target=lambda: rows.append(sample(snapshot, bridge.state)),
-                                      daemon=True)
+            worker = threading.Thread(
+                target=lambda rows=rows, snapshot=snapshot: rows.append(
+                    sample(snapshot, bridge.state)),
+                daemon=True,
+            )
             worker.start()
             while worker.is_alive():
                 pump()
