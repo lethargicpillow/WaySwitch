@@ -2049,3 +2049,60 @@ def test_native_replay_reconsiders_last_completed_word(env):
     assert native.native == [("ghbdtn ", "привет "), ("руддщ ", "hello ")]
     assert env["corrected"] == [("ghbdtn", "привет", False), ("руддщ", "hello", False)]
     assert native.taps() == []
+
+
+@pytest.mark.parametrize("key", [kc.KEY_ENTER, kc.KEY_KPENTER])
+def test_kate_enter_native_only_keeps_new_line_buffer_empty(env, key):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl.config.general.fix_on_enter = True
+    ctrl.config.general.early_switch = False
+
+    class EnterNative(NativeTypist):
+        def replace_span(self, focus, source, target, begin, stop):
+            assert stop.after_enter is True
+            return super().replace_span(focus, source, target, begin, stop)
+
+    ctrl.typist = env["typist"] = native = EnterNative()
+    type_text(env, "ghbdtn")
+    tap(env, key)
+    assert native.native == [("ghbdtn", "привет")]
+    assert env["backend"].current() == RU
+    assert not ctrl.buffer.phrase() and ctrl._last_fix is None
+    assert native.taps() == []
+
+
+@pytest.mark.parametrize("app,enabled,decline", [
+    ("kate", False, False), ("editor", True, False), ("kate", True, True),
+])
+def test_enter_never_uses_keyboard_fallback(env, app, enabled, decline):
+    ctrl = env["ctrl"]
+    probe = RenamingEditorProbe(env["clock"])
+    probe.app = app
+    ctrl.set_probe(probe)
+    ctrl.config.general.fix_on_enter = enabled
+    ctrl.config.general.early_switch = False
+    native = NativeTypist()
+    if decline:
+        native.replace_span = lambda *_: None
+    ctrl.typist = env["typist"] = native
+    type_text(env, "ghbdtn")
+    tap(env, kc.KEY_ENTER)
+    assert not native.native and not native.taps()
+    assert env["backend"].current() == US
+
+
+def test_kate_enter_queued_fix_rejects_new_input(env):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl.config.general.fix_on_enter = True
+    ctrl.config.general.early_switch = False
+    ctrl.typist = env["typist"] = native = NativeTypist()
+    queue = deferred(env)
+    type_text(env, "ghbdtn")
+    tap(env, kc.KEY_ENTER)
+    assert len(queue) == 1
+    tap(env, kc.KEY_LEFT)
+    drain(queue)
+    assert not native.native and not native.taps()
+    assert env["backend"].current() == US

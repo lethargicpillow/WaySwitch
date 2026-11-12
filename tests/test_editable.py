@@ -1528,3 +1528,45 @@ def test_kate_native_preserves_physical_append(kate_native):
     native.tree.after_insert = append
     assert kde_replace(native) == editable.SpanResult("done", True)
     assert native.tree.text == "Test " + TARGET + "X"
+
+
+@pytest.mark.parametrize("suffix", ["\n", "\n  ", "\n\t  "])
+def test_kate_enter_preserves_newline_indent_and_following_text(kate_native, suffix):
+    native = kate_native
+    native.stopped.after_enter = True
+    native.tree.text = "Lead ghbdtn" + suffix + "tail"
+    native.tree.position = len("Lead ghbdtn" + suffix)
+    assert kde_replace(native, "ghbdtn", "привет") == editable.SpanResult("done", True)
+    assert native.tree.text == "Lead привет" + suffix + "tail"
+    assert native.tree.position == len("Lead привет" + suffix)
+    assert native.tree.writes == [("insert", 5, "привет"), ("delete", 11, 17)]
+
+
+@pytest.mark.parametrize("text", ["Lead ghbdtn", "Lead ghbdtn\nX",
+                                 "Lead xghbdtn\n", "Lead other\n"])
+def test_kate_enter_rejects_unproven_previous_line(kate_native, text):
+    native = kate_native
+    native.stopped.after_enter = True
+    native.tree.text = text
+    native.tree.position = len(text)
+    assert kde_replace(native, "ghbdtn", "привет") == editable.SpanResult("aborted")
+    assert not native.tree.writes and not native.committed
+    assert not native.stopped.fast_switch
+
+
+def test_kate_enter_keeps_original_if_input_arrives_during_insert(kate_native):
+    native = kate_native
+    native.stopped.after_enter = True
+    native.tree.text = "Lead ghbdtn\n  "
+    native.tree.position = len(native.tree.text)
+    count = [0]
+    native.stopped.append = lambda: count[0]
+
+    def append():
+        native.tree.append("X")
+        count[0] += 1
+
+    native.tree.after_insert = append
+    assert kde_replace(native, "ghbdtn", "привет").status == "failed"
+    assert native.tree.text == "Lead приветghbdtn\n  X"
+    assert all(operation[0] != "delete" for operation in native.tree.writes)

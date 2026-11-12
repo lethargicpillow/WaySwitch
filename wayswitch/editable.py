@@ -245,12 +245,36 @@ def _prepare_anchor(tree, focus, source, stopped, verify=None):
             or caret < len(source) or count < caret):
         return None
     physical_base = _physical_count(stopped)
+    suffix = ""
+    end = caret
+    if getattr(stopped, "after_enter", False) is True:
+        if verify is None or not _span(source) or not verify():
+            return None
+        # The observed caret must be just after a newline and bounded autoindent.
+        # Never include that newline or indentation in the edited range.
+        left = max(0, caret - len(source) - 130)
+        preceding = tree.text_range(focus.field, left, caret)
+        if not isinstance(preceding, str) or len(preceding) != caret - left:
+            return None
+        newline = preceding.rfind("\n")
+        if newline < len(source) or any(ch not in " \t" for ch in preceding[newline + 1:]):
+            return None
+        suffix = preceding[newline:]
+        if len(suffix) > 129:
+            return None
+        end = caret - len(suffix)
+        # A partial word after a click must not match merely by its ending.
+        start = newline - len(source)
+        if start == 0 and left != 0:
+            return None
+        if start > 0 and (preceding[start - 1].isalnum() or preceding[start - 1] == "_"):
+            return None
     if verify is not None:
         # Ordinary Qt editors: prove the exact span BEFORE changing the layout.
         # A stale buffer or a late physical keystroke must not change the layout.
         if physical_base is None or not _span(source) or not verify():
             return None
-        actual = tree.text_range(focus.field, caret - len(source), caret)
+        actual = tree.text_range(focus.field, end - len(source), end)
         if (not _span(actual) or len(actual) != len(source)
                 or actual.casefold() != source.casefold()):
             return None
@@ -269,7 +293,8 @@ def _prepare_anchor(tree, focus, source, stopped, verify=None):
         return None
     if physical_base is not None and (stopped() or _physical_count(stopped) != physical_base):
         return None
-    return caret - len(source), caret, count, physical_base
+    anchor = (end - len(source), end, count, physical_base)
+    return anchor + (suffix,) if suffix else anchor
 
 
 def _replace_checked(tree, focus, source, target, commit, stopped, events, safe,
@@ -288,7 +313,8 @@ def _replace_checked(tree, focus, source, target, commit, stopped, events, safe,
 
         if not safe():
             return SpanResult("aborted")
-        physical_base = anchor[3] if anchor is not None and len(anchor) == 4 else None
+        physical_base = anchor[3] if anchor is not None and len(anchor) >= 4 else None
+        suffix = anchor[4] if anchor is not None and len(anchor) == 5 else ""
         if anchor is None:
             caret = tree.caret(node)
             count = tree.character_count(node)
@@ -301,7 +327,10 @@ def _replace_checked(tree, focus, source, target, commit, stopped, events, safe,
             if (type(start) is not int or type(caret) is not int or type(count) is not int
                     or start < 0 or start + len(source) != caret or count < caret):
                 return SpanResult("aborted")
-        anchor_count, anchor_caret = count, caret
+        anchor_count, anchor_caret = count, caret + len(suffix)
+        if suffix and (tree.caret(node) != anchor_caret or tree.character_count(node) != count
+                       or read(caret, anchor_caret) != suffix):
+            return SpanResult("aborted")
         if physical_base is not None and _physical_count(stopped) != physical_base:
             # Печать до первой записи относится к прежней раскладке: span уже
             # не соответствует набранному и не вправе начинать замену.
@@ -324,6 +353,17 @@ def _replace_checked(tree, focus, source, target, commit, stopped, events, safe,
             else:
                 return False
             changes = events[first:]
+            if suffix:
+                # No new physical text while editing a previous line. Its newline
+                # and indentation must still exist at the exact post-edit offsets.
+                delta = len(target) if kind == "insert" else len(target) - size
+                return (physical_base is not None and n1 == n2 == physical_base
+                        and current_count == anchor_count + delta
+                        and current_caret == anchor_caret + delta
+                        and (not changes or _edits(changes, before, after, start, kind,
+                                                  size, initial_count, current_count))
+                        and read(start, start + len(after) + len(suffix)) == after + suffix
+                        and _physical_count(stopped) == physical_base and not stopped())
             if eventless or kate:
                 # Редактор Calc не даёт достоверных object:text-changed: события
                 # могут отсутствовать или не совпадать с диапазоном. Доказываем
@@ -395,7 +435,11 @@ def _replace_checked(tree, focus, source, target, commit, stopped, events, safe,
         if not confirmed(first, source, combined, "insert", len(target), count):
             return SpanResult("failed", True)
         # No recovery writes: uncertainty must retain the original rather than erase it.
-        if read(start, start + len(combined)) != combined:
+        if read(start, start + len(combined) + len(suffix)) != combined + suffix:
+            return SpanResult("failed", True)
+        if suffix and (_physical_count(stopped) != physical_base
+                       or tree.caret(node) != anchor_caret + len(target)
+                       or tree.character_count(node) != anchor_count + len(target)):
             return SpanResult("failed", True)
         second = len(events)
         delete_count = tree.character_count(node)
@@ -546,6 +590,8 @@ def try_replace_kde(focus, source, target, commit, stopped) -> SpanResult | None
                 and not (context.pid > 0 and context.window_epoch >= 0))):
         return SpanResult("aborted")
     kate = _kate(focus)
+    if getattr(stopped, "after_enter", False) is True and not kate:
+        return SpanResult("aborted")
     if kate and (context.pid <= 0 or context.window_epoch < 0 or context.app_ids
                  or not _span(source) or not _span(target)):
         return SpanResult("aborted")

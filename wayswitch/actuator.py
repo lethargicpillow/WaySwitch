@@ -66,6 +66,7 @@ class Plan:
     # Привязка буфера к полю не была подтверждена до первого символа: писать
     # клавишами нельзя, только проверяемая замена диапазона.
     require_verified: bool = False
+    native_after_enter: bool = False
 
 
 class KeyTypist(Protocol):
@@ -390,6 +391,10 @@ def _attempt_native(plan: Plan, typist, run: _Run, setup,
     если native-возможность не подтвердилась.
     """
     replace = getattr(typist, "replace_span", None)
+    if plan.native_after_enter and (plan.focus is None or plan.focus.app != "kate"
+                                    or not plan.require_verified):
+        run.abort_reason = "enter-native-only"
+        return ABORTED
     shape = _native_shape(plan)
     if replace is None or shape is None:
         run.native_status = "no-provider" if replace is None else "no-span"
@@ -429,6 +434,7 @@ def _attempt_native(plan: Plan, typist, run: _Run, setup,
         return True
 
     stop = _NativeStop(run, prepare)
+    stop.after_enter = plan.native_after_enter
 
     def begin():
         nonlocal prepared, started
