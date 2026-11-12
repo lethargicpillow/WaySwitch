@@ -12,6 +12,7 @@ import pytest
 from tests.fakes import make_keymap
 from wayswitch import cli, explain
 from wayswitch import config as cfgmod
+from wayswitch.detector import LanguageModel
 from wayswitch.keymap import XkbKeymap
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -78,7 +79,6 @@ def test_explain_reverse_direction_ru_to_us(models):
 
 @pytest.mark.parametrize(("word", "exceptions", "reason"), [
     ("hello", (), "dict-a"),
-    ("hf", (), "short"),
     ("ghbdtn.com", (), "tech"),
     ("ghbdtn", ("ghbdtn",), "exception"),
     ("ghbdtn!", ("ghbdtn",), "exception"),
@@ -89,6 +89,30 @@ def test_explain_known_exception_short_tech_and_invalid(models, word, exceptions
     assert report["decision"]["action"] == "keep"
     assert report["decision"]["reason"] == reason
     assert report["exception"] is bool(exceptions)
+
+
+def test_explain_unknown_short_word_uses_short_rule():
+    # Isolate the decision branch from changes in the shipped vocabulary.
+    # A future dictionary addition must not invalidate this unit test.
+    models = {
+        "en": LanguageModel("en", ["hello"], ["hello"], {}),
+        "ru": LanguageModel("ru", ["привет"], ["привет"], {}),
+    }
+    report = _report("qz", models=models)
+    assert report["a"]["valid"] and report["b"]["valid"]
+    assert not report["a"]["in_dictionary"]
+    assert not report["b"]["in_dictionary"]
+    assert report["decision"]["action"] == "keep"
+    assert report["decision"]["reason"] == "short"
+    assert "ngram_score" not in report["a"] and "ngram_score" not in report["b"]
+
+
+def test_explain_known_gaming_abbreviation_is_kept(models):
+    report = _report("hf", models=models)
+    assert report["a"]["in_dictionary"]
+    assert report["decision"] == {
+        "action": "keep", "target": "hf", "reason": "dict-a", "confidence": 1.0,
+    }
 
 
 def test_explain_ngram_scores_only_when_computed(models):
