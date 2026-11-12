@@ -1875,7 +1875,7 @@ def test_mutable_window_title_does_not_discard_first_word(env, app, source, targ
     probe.title += " *"
     drain(queue)
     assert env["corrected"] == [(source, target, False)]
-    assert typed_text(env) == "\\b" * (len(source) + 1) + target + " "
+    assert typed_text(env) == chr(8) * (len(source) + 1) + target + " "
 
 
 def test_kate_native_fix_survives_title_update_during_replacement(env):
