@@ -1594,21 +1594,26 @@ class Controller:
         capture_focus = self._buffer_focus
         secret = secret or capture_focus[-1] is not False or self._secret_focus()
         self._pending += 1
+        scheduled_at = time.monotonic()
 
         def run() -> None:
             self._pending -= 1
             ok = False
             outcome: dict = {}
+            queue_ms = round((time.monotonic() - scheduled_at) * 1000)
             try:
                 if self._focus_waiting:
                     self._focus_wait_boundary = True
                 if self.busy:
+                    outcome["stage"] = "queue-busy"
                     log.info("исправление %s отменено: другое исправление в работе", reason)
                     return
                 if whole_phrase and self.buffer.expire(self.clock()):
+                    outcome["stage"] = "queue-expired"
                     log.info("исправление %s отменено: фраза устарела", reason)
                     return
                 if not self._sync_focus() or self._buffer_focus != capture_focus:
+                    outcome["stage"] = "queue-focus"
                     log.debug("исправление отменено: фокус изменился до исполнения")
                     return
                 if whole_phrase:
@@ -1621,6 +1626,7 @@ class Controller:
                 else:
                     unchanged = self.buffer.last_word_with_tail() == (snapshot, tail)
                 if not unchanged:
+                    outcome["stage"] = "queue-buffer"
                     log.info("исправление %s отменено: буфер изменился", reason)
                     return
                 ok = self._apply_fix(snapshot, tail, target_group, text, manual=manual,
@@ -1629,6 +1635,15 @@ class Controller:
                                      span=span, caps_off=caps_off, secret=secret, outcome=outcome,
                                      source_text=source_text)
             finally:
+                log.debug("диагностика фикса: reason=%s ok=%s queue_ms=%d "
+                          "stage=%s transport=%s native=%s abort=%s "
+                          "release_ms=%s execute_ms=%s committed=%s",
+                          reason, ok, queue_ms, outcome.get("stage", "preflight"),
+                          outcome.get("transport", "none"),
+                          outcome.get("native_status", "not-attempted"),
+                          outcome.get("abort_reason", "none"),
+                          outcome.get("release_ms", "-"), outcome.get("execute_ms", "-"),
+                          outcome.get("committed", False))
                 if done is not None:
                     done(ok, outcome.get("secret", secret))
                 self._run_pending_gesture()
@@ -1794,6 +1809,8 @@ class Controller:
                    trigger: tuple[int, int] | None = None, span: bool = False,
                    caps_off: bool = False, secret: bool = False,
                    outcome: dict | None = None, source_text: str | None = None) -> bool:
+        outcome = {} if outcome is None else outcome
+        outcome["stage"] = "layout-check"
         # Бэкенд может ошибаться насчёт текущей раскладки (IBus на GNOME 46+).
         # Проверяем ДО плана: после Backspace-ов откатывать уже нечего.
         if self._groups() is None or self.backend.current() != group_before:
@@ -1803,6 +1820,7 @@ class Controller:
             log.error("исправление отменено: бэкенд %s ошибается насчёт раскладки "
                       "(включите расширение GNOME Shell)", getattr(self.backend, "name", "?"))
             return False
+        outcome["stage"] = "plan"
         switch = switch or bool(getattr(self.backend, "always_switch", False))
         plan = plan_fix(len(keys) + tail, text, target_group, self.keymap, self.buffer.caps,
                         switch=switch, caps_off=caps_off)
@@ -1820,7 +1838,6 @@ class Controller:
         plan.source_text = original + " " * tail
         plan.focus = self.probe.snapshot() if self.probe is not None else None
         secret = secret or self._secret_focus()
-        outcome = {} if outcome is None else outcome
         outcome["secret"] = secret
         expired_phrase = False
 
@@ -1847,6 +1864,7 @@ class Controller:
         started = self.clock()
         try:
             if self._provisional_binding and self.probe is not None:
+                outcome["stage"] = "focus-refresh"
                 fresh = self._refresh_focus_for_verified(plan.focus)
                 if fresh is not None:
                     plan.focus = fresh
@@ -1855,13 +1873,22 @@ class Controller:
                     self._buffer_focus = (self.probe, fresh.generation, fresh.field,
                                           fresh.app, fresh.protection(self.clock()))
                     self._buffer_window = fresh.window
-            if (self._abort_requested or self._busy_reset or self._operation_invalidated
-                    or self.paused or self.locked or self.screen_locked()
-                    or not self._wait_release(trigger)
-                    or not self._wait_trigger_release(trigger)):
+            outcome["stage"] = "input-guard"
+            release_started = time.monotonic()
+            blocked = (self._abort_requested or self._busy_reset or self._operation_invalidated
+                       or self.paused or self.locked or self.screen_locked())
+            if not blocked:
+                outcome["stage"] = "wait-release"
+                blocked = not self._wait_release(trigger)
+            if not blocked:
+                outcome["stage"] = "wait-trigger-release"
+                blocked = not self._wait_trigger_release(trigger)
+            outcome["release_ms"] = round((time.monotonic() - release_started) * 1000)
+            if blocked:
                 log.info("исправление отменено: изменилось состояние ввода")
                 result = ABORTED
             else:
+                outcome["stage"] = "execute"
                 result = execute(plan, self.typist, self.backend, abort=self._abort,
                                  key_delay=self.config.typing.key_delay_ms / 1000.0,
                                  sleep=self.sleep,
@@ -1880,6 +1907,7 @@ class Controller:
             # исправление (светодиод подтвердит событием клавиатуры).
             self.buffer.set_caps(False)
         if not self._sync_focus() or self._operation_invalidated:
+            outcome["stage"] = "post-focus"
             self._busy_reset = True
             result = ABORTED
         lost, self._lost_input = self._lost_input, False

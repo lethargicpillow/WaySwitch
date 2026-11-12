@@ -147,3 +147,28 @@ def test_partial_text_transport_error_is_not_retried():
     assert execute(Plan([Type("hello", [])]), typist, FakeBackend()) == FAILED
     assert typist.calls == [("type", "hello")]
     assert typist.written == "he"
+
+
+@pytest.mark.parametrize("typist,transport", [(RecordingTypist, "keyboard"),
+                                               (RecordingTextTypist, "text")])
+def test_execution_diagnostics_report_fallback(typist, transport):
+    plan = plan_fix(3, "abc", US, make_keymap(), caps_on=False, switch=False)
+    outcome = {}
+    assert execute(plan, typist(), FakeBackend(current=US), outcome=outcome) == DONE
+    assert outcome["transport"] == transport
+    assert outcome["native_status"] in {"no-provider", "no-span"}
+    assert outcome["stage"] == "Type"
+    assert outcome["committed"] is True
+    assert outcome["execute_ms"] >= 0
+
+
+def test_execution_diagnostics_report_verified_rejection():
+    plan = plan_fix(3, "abc", US, make_keymap(), caps_on=False, switch=False)
+    plan.require_verified = True
+    outcome = {}
+    typist = RecordingTypist()
+    assert execute(plan, typist, FakeBackend(current=US), outcome=outcome) == ABORTED
+    assert outcome["stage"] == "fallback-blocked"
+    assert outcome["abort_reason"] == "verified-required"
+    assert outcome["committed"] is False
+    assert typist.taps() == []
