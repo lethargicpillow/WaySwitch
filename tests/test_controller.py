@@ -2170,3 +2170,73 @@ def test_punctuation_queue_rejects_later_input(env):
     drain(queue)
     assert not native.native and not native.taps()
     assert env["backend"].current() == US
+
+
+@pytest.mark.parametrize("source,mark,target,group,shift", [
+    ("ghbdtn", "!", "привет!", US, kc.KEY_LEFTSHIFT),
+    ("ghbdtn", "?", "привет,", US, kc.KEY_RIGHTSHIFT),
+    ("руддщ", "!", "hello!", RU, kc.KEY_RIGHTSHIFT),
+    ("руддщ", ",", "hello?", RU, kc.KEY_LEFTSHIFT),
+])
+def test_kate_punctuation_completes_with_physical_shift_held(
+        env, monkeypatch, source, mark, target, group, shift):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl.config.general.early_switch = False
+    env["backend"].current_index = group
+    monkeypatch.setattr(controller_mod, "RELEASE_WAIT", 0.02)
+    ctrl.typist = env["typist"] = native = NativeTypist()
+    queue = deferred(env)
+    type_text(env, source)
+    code, shifted = env["km"].key_for(mark, group)
+    assert shifted
+    ctrl.on_key(shift, 1, 1)
+    ctrl.on_key(code, 1, 1)
+    ctrl.on_key(code, 0, 1)
+    assert len(queue) == 1
+    drain(queue)
+    assert native.native == [(source + mark, target)]
+    assert env["backend"].current() != group
+    assert ctrl.buffer.held_physical() == {(1, shift)}
+    assert not native.events  # no virtual presses OR modifier releases
+    ctrl.on_key(shift, 0, 1)
+    assert not ctrl.buffer.held_physical()
+
+
+def test_kate_punctuation_held_shift_provider_decline_never_types(env, monkeypatch):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl.config.general.early_switch = False
+    monkeypatch.setattr(controller_mod, "RELEASE_WAIT", 0.02)
+    ctrl.typist = env["typist"] = native = NativeTypist()
+    native.replace_span = lambda *_: None
+    queue = deferred(env)
+    type_text(env, "ghbdtn")
+    ctrl.on_key(kc.KEY_LEFTSHIFT, 1, 1)
+    ctrl.on_key(kc.KEY_1, 1, 1)
+    ctrl.on_key(kc.KEY_1, 0, 1)
+    drain(queue)
+    assert not native.events and not native.native
+    assert env["backend"].current() == US
+    assert ctrl.buffer.held_physical() == {(1, kc.KEY_LEFTSHIFT)}
+    ctrl.on_key(kc.KEY_LEFTSHIFT, 0, 1)
+
+
+def test_kate_punctuation_held_other_printable_key_still_blocks(env, monkeypatch):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl.config.general.early_switch = False
+    monkeypatch.setattr(controller_mod, "RELEASE_WAIT", 0.02)
+    ctrl.typist = env["typist"] = native = NativeTypist()
+    queue = deferred(env)
+    type_text(env, "ghbdt")
+    ctrl.on_key(kc.KEY_N, 1, 2)  # previous letter still held on another keyboard
+    ctrl.on_key(kc.KEY_LEFTSHIFT, 1, 1)
+    ctrl.on_key(kc.KEY_1, 1, 1)
+    ctrl.on_key(kc.KEY_1, 0, 1)
+    assert len(queue) == 1
+    drain(queue)
+    assert not native.events and not native.native
+    assert env["backend"].current() == US
+    ctrl.on_key(kc.KEY_N, 0, 2)
+    ctrl.on_key(kc.KEY_LEFTSHIFT, 0, 1)

@@ -1857,7 +1857,8 @@ class Controller:
             return None
         return snap
 
-    def _blocking_keys_held(self, trigger: tuple[int, int] | None) -> bool:
+    def _blocking_keys_held(self, trigger: tuple[int, int] | None,
+                            *, ignore_shift: bool = False) -> bool:
         """Есть ли зажатые клавиши, мешающие печати, кроме самого триггера.
 
         Триггер не считается: его key-up мог ещё не дойти, и его отдельно ждёт
@@ -1869,16 +1870,18 @@ class Controller:
         held = self.buffer.held_physical()
         if trigger is not None:
             held = held - {trigger}
-        return bool({code for _, code in held} - kc.COMMAND_MODIFIERS)
+        ignored = kc.COMMAND_MODIFIERS | (kc.SHIFT_KEYS if ignore_shift else set())
+        return bool({code for _, code in held} - ignored)
 
-    def _wait_release(self, trigger: tuple[int, int] | None = None) -> bool:
+    def _wait_release(self, trigger: tuple[int, int] | None = None,
+                      *, ignore_shift: bool = False) -> bool:
         # Дедлайн — по настоящим часам (time.monotonic), а не по self.clock:
         # self.clock в тестах подменяется управляемым вручную фейком и не тикает
         # сам по себе внутри этого цикла ожидания, поэтому дедлайн на нём
         # никогда не наступил бы. Здесь же мы ждём реальное железо (пока
         # физически отпустят клавиши), так что нужно настоящее время.
         deadline = time.monotonic() + RELEASE_WAIT
-        while self._blocking_keys_held(trigger):
+        while self._blocking_keys_held(trigger, ignore_shift=ignore_shift):
             if time.monotonic() > deadline:
                 return False
             self.pump()
@@ -1943,6 +1946,13 @@ class Controller:
         plan.focus = self.probe.snapshot() if self.probe is not None else None
         if native_boundary and not _kate(plan.focus):
             return False
+        if after_punct:
+            # Native-only punctuation already exists in the editor. Do not
+            # emit synthetic modifier releases or wait for physical Shift:
+            # the verified range write is independent of keyboard modifiers.
+            # require_verified above prevents either keyboard or text fallback.
+            plan.steps = [step for step in plan.steps
+                          if not isinstance(step, ReleaseModifiers)]
         secret = secret or self._secret_focus()
         outcome["secret"] = secret
         expired_phrase = False
@@ -1998,12 +2008,16 @@ class Controller:
                        or self.paused or self.locked or self.screen_locked())
             if not blocked:
                 outcome["stage"] = "wait-release"
-                blocked = not self._wait_release(trigger)
+                blocked = not (self._wait_release(trigger, ignore_shift=True)
+                               if after_punct else self._wait_release(trigger))
             if not blocked and not native_space and not native_boundary:
                 outcome["stage"] = "wait-trigger-release"
                 blocked = not self._wait_trigger_release(trigger)
             outcome["release_ms"] = round((time.monotonic() - release_started) * 1000)
             if blocked:
+                outcome["abort_reason"] = (
+                    "held-key" if outcome["stage"] in {"wait-release", "wait-trigger-release"}
+                    else "input-guard")
                 log.info("исправление отменено: изменилось состояние ввода")
                 result = ABORTED
             else:
@@ -2012,7 +2026,8 @@ class Controller:
                                  key_delay=self.config.typing.key_delay_ms / 1000.0,
                                  sleep=self.sleep,
                                  restore_group=group_before if switch else None,
-                                 hold=self._wait_shift_released, outcome=outcome, stop=self._stop,
+                                 hold=None if after_punct else self._wait_shift_released,
+                                 outcome=outcome, stop=self._stop,
                                  native_append=(lambda: self._native_append_count(trigger))
                                  if native_boundary else self._native_append_count,
                                  native_focus=self._native_focus_snapshot,
