@@ -278,7 +278,7 @@ def test_gui_app_id_does_not_clash_with_daemon():
 def test_repo_url_points_to_github():
     from wayswitch.gui.app import REPO_URL
 
-    assert REPO_URL.startswith("https://github.com/Wetoshkin/WaySwitch")
+    assert REPO_URL.startswith("https://github.com/lethargicpillow/WaySwitch")
 
 
 def test_update_text(ru_locale):

@@ -37,9 +37,9 @@
 
 **Автоматическое исправление русско-английской раскладки для Linux на Wayland.**
 
-**1.1.4 — диагностика explain, локализация интерфейса ru/en и стабилизация замены текста.**
+**1.1.5 — улучшения KDE/Wayland: нативная замена в Kate, Enter, пунктуация и составные слова.**
 
-Готовые пакеты и контрольные суммы: [последний опубликованный выпуск](https://github.com/Wetoshkin/WaySwitch/releases/latest).
+Готовые пакеты и контрольные суммы: [последний опубликованный выпуск](https://github.com/lethargicpillow/WaySwitch/releases/latest).
 Что уже сделано, проверено и ещё не закончено: [состояние проекта](docs/PROGRESS.md).
 
 WaySwitch чинит слово, набранное не в той раскладке (`ghbdtn` вместо
@@ -152,7 +152,7 @@ openSUSE Tumbleweed, Arch и производные). Для исправлен�
    <kbd>Enter</kbd>:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/Wetoshkin/WaySwitch/main/packaging/get.sh | sh
+   curl -fsSL https://raw.githubusercontent.com/lethargicpillow/WaySwitch/v1.1.5/packaging/get.sh | sh
    ```
 
    Если в ответ написано «curl: команда не найдена» (так бывает в Ubuntu и
@@ -206,7 +206,7 @@ openSUSE Tumbleweed, Arch и производные). Для исправлен�
 <summary><b>Установить вручную, без скрипта</b></summary>
 
 Скачайте пакет со страницы
-[Releases](https://github.com/Wetoshkin/WaySwitch/releases) — файл окажется
+[Releases](https://github.com/lethargicpillow/WaySwitch/releases) — файл окажется
 в папке «Загрузки». Затем выполните команду для своего дистрибутива.
 
 **Ubuntu, Debian и производные** — файл `wayswitch_…_all.deb`:
@@ -239,7 +239,7 @@ sudo zypper install --allow-unsigned-rpm "$(xdg-user-dir DOWNLOAD)"/wayswitch-*.
 
 ```bash
 sudo pacman -S --needed git
-git clone https://github.com/Wetoshkin/WaySwitch.git
+git clone --branch v1.1.5 https://github.com/lethargicpillow/WaySwitch.git
 cd WaySwitch
 sudo packaging/install.sh
 ```
@@ -289,7 +289,7 @@ doctor` и установите курсор в обычное текстово�
 <summary><b>Удаление</b></summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Wetoshkin/WaySwitch/main/packaging/get.sh | sh -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/lethargicpillow/WaySwitch/v1.1.5/packaging/get.sh | sh -s -- --uninstall
 ```
 
 Скрипт сам определит, как WaySwitch был установлен. Настройки остаются в
@@ -303,7 +303,7 @@ curl -fsSL https://raw.githubusercontent.com/Wetoshkin/WaySwitch/main/packaging/
 Доступны два переносимых формата окна настроек. Клавиатуру читает и
 исправляет текст отдельная нативная служба WaySwitch, установленная на хосте
 командой выше. Используйте службу и окно из одного
-[выпуска](https://github.com/Wetoshkin/WaySwitch/releases). Мастер первого запуска
+[выпуска](https://github.com/lethargicpillow/WaySwitch/releases). Мастер первого запуска
 объясняет установку службы, автозапуск и диагностику; настройки и пауза общие
 для обоих компонентов.
 
@@ -594,7 +594,7 @@ WaySwitch маркер не понимает и при собственном с
 Без окна — та же команда, что и для установки:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Wetoshkin/WaySwitch/main/packaging/get.sh | sh
+curl -fsSL https://raw.githubusercontent.com/lethargicpillow/WaySwitch/v1.1.5/packaging/get.sh | sh
 ```
 
 Настройки и исключения сохраняются, перезагружаться не нужно: значок
