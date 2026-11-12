@@ -702,26 +702,69 @@ def focus_bus(monkeypatch):
 
 
 def test_focus_event_invalidates_young_safe_snapshot(monkeypatch, focus_bus):
-    monkeypatch.setattr(a11y, "query_focus", lambda: ("Editor", False))
-    probe = a11y.AtspiProbe(clock=Clock())
-    probe._refresh()
-    assert probe.snapshot().app == "Editor"
-    assert focus_bus["callbacks"], "опрос начат без подписки на смену фокуса"
-    focus_bus["callbacks"][0]()
-    assert a11y.skip_reason(probe, [], True, 100.0) is not None
+    # A real focus event now wakes the worker. Hold its next query so the
+    # invalidated snapshot can be inspected before the fresh result arrives.
+    calls = []
+    release = threading.Event()
 
-
-def test_focus_event_during_query_cannot_republish_old_safe_focus(monkeypatch, focus_bus):
     def query():
-        focus_bus["callbacks"][0]()
+        calls.append(1)
+        if len(calls) > 1:
+            assert release.wait(2.0)
         return "Editor", False
 
     monkeypatch.setattr(a11y, "query_focus", query)
-    probe = a11y.AtspiProbe(clock=Clock())
-    probe._refresh()
-    assert focus_bus["callbacks"], "опрос начат без подписки на смену фокуса"
-    assert probe.snapshot().app is None
-    assert a11y.skip_reason(probe, [], True, 100.0) is not None
+    probe = a11y.AtspiProbe(clock=Clock(), poll_sec=60.0)
+    probe.poke()
+    thread = probe._thread
+    try:
+        deadline = time.monotonic() + 1.0
+        while probe.snapshot().app is None and time.monotonic() < deadline:
+            time.sleep(0.001)
+        assert probe.snapshot().app == "Editor"
+        assert len(focus_bus["callbacks"]) == 1
+        focus_bus["callbacks"][0]()
+        assert a11y.skip_reason(probe, [], True, 100.0) is not None
+        assert probe.snapshot().app is None
+    finally:
+        probe.close()
+        release.set()
+        thread.join(2.0)
+    assert not thread.is_alive()
+    assert focus_bus["closed"] == [focus_bus["connection"]]
+
+
+def test_focus_event_during_query_cannot_republish_old_safe_focus(monkeypatch, focus_bus):
+    calls = []
+    second_query = threading.Event()
+    release = threading.Event()
+
+    def query():
+        calls.append(1)
+        if len(calls) == 1:
+            focus_bus["callbacks"][0]()
+        else:
+            # Reaching a second query proves the invalidated first query
+            # already returned; the old result must not have been published.
+            second_query.set()
+            assert release.wait(2.0)
+        return "Editor", False
+
+    monkeypatch.setattr(a11y, "query_focus", query)
+    probe = a11y.AtspiProbe(clock=Clock(), poll_sec=60.0)
+    probe.poke()
+    thread = probe._thread
+    try:
+        assert second_query.wait(1.0)
+        assert len(focus_bus["callbacks"]) == 1
+        assert probe.snapshot().app is None
+        assert a11y.skip_reason(probe, [], True, 100.0) is not None
+    finally:
+        probe.close()
+        release.set()
+        thread.join(2.0)
+    assert not thread.is_alive()
+    assert focus_bus["closed"] == [focus_bus["connection"]]
 
 
 def test_registration_loss_before_query_generation_stays_blocked(monkeypatch, focus_bus):
@@ -1102,6 +1145,15 @@ def test_idle_worker_keeps_accessibility_enabled_until_close(monkeypatch, focus_
         while probe._thread is not None and time.monotonic() < deadline:
             time.sleep(0.01)
         assert len(focus_bus["callbacks"]) == 1
+        # The retained subscription must also wake an idle probe without a
+        # physical key, and must not register another subscription.
+        focus_bus["callbacks"][0]()
+        deadline = time.monotonic() + 1.0
+        while probe._thread is not None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert probe._thread is None
+        assert len(focus_bus["callbacks"]) == 1
+        assert not focus_bus["closed"]
     finally:
         probe.close(wait=True)
     assert focus_bus["closed"] == [focus_bus["connection"]]
