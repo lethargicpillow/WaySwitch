@@ -580,9 +580,12 @@ class Detector:
 
         # 8. Короткие слова — только частотные и только в контексте своего языка.
         if short:
-            if b.valid and b.core.lower() in self.models[b.lang].top and not a.in_dict \
-                    and context[-1] in (None, b.lang):
-                return fix("dict-short", 0.8)
+            if b.valid and b.core.lower() in self.models[b.lang].top and not a.in_dict:
+                if context[-1] in (None, b.lang):
+                    return fix("dict-short", 0.8)
+                if (sens != SENSITIVITY["conservative"]
+                        and b.core.lower() in lexicon.TRANSITION_SHORT.get(b.lang, ())):
+                    return fix("dict-short-transition", 0.8)
             return keep("short")
 
         # 6–7. N-граммы.

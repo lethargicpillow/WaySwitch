@@ -75,3 +75,18 @@ RU_CONTEXT_COLLISIONS = {
     "oj": "що", "jr": "ок", "ae": "фу", "fe": "ау",
     "j,": "об", "x`": "чё", "g;": "пж", "b[": "их", "t`": "её",
 }
+
+# Short, common function words and unmistakable conversational forms may begin
+# a new language even after a sentence in the previous language. The source
+# must not be a dictionary word; all stop-rules in Detector.decide still apply.
+TRANSITION_SHORT = {
+    "ru": frozenset((
+        "на по до от из за об со во ко но не ни бы же ли да ну то уж "
+        "мы вы ты он ей им их ах ой ох эх ай ау эй ух ха хм фу "
+        "че чё чо шо що ща щас крч кста пж спс хз мб лан ага угу неа"
+    ).split()),
+    "en": frozenset((
+        "as at by in of on to up so no or an am be do go he is it me my us we if "
+        "hi oh ah ok yo uh um eh ha ow aw"
+    ).split()),
+}

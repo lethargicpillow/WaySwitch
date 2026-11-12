@@ -63,3 +63,23 @@ def test_conservative_does_not_override_dictionary_collision(detector):
 def test_supplement_loaded_without_retraining(detector):
     assert RU_WORDS <= detector.models["ru"].words
     assert EN_WORDS <= detector.models["en"].words
+
+
+@pytest.mark.parametrize("word,source,target,previous", [
+    ("на", US, RU, "en"), ("по", US, RU, "en"), ("от", US, RU, "en"),
+    ("же", US, RU, "en"), ("бы", US, RU, "en"),
+    ("че", US, RU, "en"), ("шо", US, RU, "en"),
+    ("in", RU, US, "ru"), ("on", RU, US, "ru"), ("to", RU, US, "ru"),
+])
+def test_unambiguous_short_words_can_start_language_transition(
+        detector, word, source, target, previous):
+    keys = keys_for_text(detector.keymap, word, target)
+    decision = detector.decide(keys, source, target, (previous, previous))
+    assert (decision.action, decision.target_text) == ("fix", word), decision.reason
+    assert decision.reason == "dict-short-transition"
+
+
+def test_conservative_keeps_original_short_transition_policy(detector):
+    keys = keys_for_text(detector.keymap, "на", RU)
+    det = Detector(detector.keymap, detector.models, sensitivity=SENSITIVITY["conservative"])
+    assert det.decide(keys, US, RU, ("en", "en")).action == "keep"
