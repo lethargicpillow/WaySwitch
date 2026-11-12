@@ -3,7 +3,7 @@
 The shipped frequency corpus and n-gram weights remain unchanged. These
 entries are explicitly reviewed spellings, not synthetic frequency counts.
 A short-word collision is resolved only with established target-language
-context; normal English words and upper-case abbreviations are not overridden.
+context; normal English words and recognized abbreviations are not overridden.
 """
 
 RU_WORDS = frozenset((
@@ -50,7 +50,7 @@ EN_WORDS = frozenset((
     "fam feature features ffs for fps fr from ftw fyi geez gg gif gifs gimme gl gnome go "
     "gonna gotcha gotta grats gz ha had hah haha hahaha hardware has he heh hehe her hey hf "
     "hi him his hm hmm hotfix how huh i idk if imho imo in inside into irl is it jeez jk "
-    "kde kek kinda kubuntu lag laggy lags latency legit lemme linux lmao lmfao lol lolz lul "
+    "kate kde kek kinda kubuntu lag laggy lags latency legit lemme linux lmao lmfao lol lolz lul "
     "lulz may me meh meme memed memes merge merged merging my nah near newbie ngl no noob "
     "nope not notwithstanding now np nvm obvs of off oh ok okay okey omg on one onto oof "
     "oops or ouch our out outside over ow per ping pls plz pog probs prolly proxies proxy "
@@ -88,5 +88,29 @@ TRANSITION_SHORT = {
     "en": frozenset((
         "as at by in of on to up so no or an am be do go he is it me my us we if "
         "hi oh ah ok yo uh um eh ha ow aw"
+    ).split()),
+}
+
+
+# Frequent ordinary words that may be uppercase in prose, including short
+# function words. A dictionary match in the source language always wins.
+# Unknown all-caps tokens still keep the abbreviation guard.
+UPPERCASE_WORDS = {
+    "ru": TRANSITION_SHORT["ru"] | frozenset((
+        "вот там тут так как кто где что чем уже еще ещё все всё "
+        "это эта эти этот тот та те мой моя мое моё твой наш ваш "
+        "свой сам сама сами они оно нас вам вас ему ему ей их "
+        "нет да был была были быть есть или если надо пора "
+        "день ночь мир дом год друг дело язык текст план факт "
+        "рука нога вода кофе хлеб соль кино игра"
+    ).split()),
+    "en": TRANSITION_SHORT["en"] | frozenset((
+        "the and but for not yes you your they them then than that this "
+        "what when where why how who whom with from into over only also "
+        "some more most much many both each such very well good bad "
+        "here there next last time word text work test file name "
+        "make take give keep read write look know want need come "
+        "went back down left right like just even same new old "
+        "true real long short line code kate"
     ).split()),
 }

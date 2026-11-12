@@ -556,7 +556,15 @@ class Detector:
                 or al.startswith(TECH_PREFIXES) or a.core.lower() in TECH_WORDS:
             return keep("tech")
         if 2 <= len(a.core) < 5 and a.core.isupper():
-            return keep("abbrev")
+            # Uppercase prose is not necessarily an acronym. Permit only
+            # unambiguous, known ordinary target words; the normal dictionary,
+            # exception and short-word rules below still decide the correction.
+            ordinary_target = (sens != SENSITIVITY["conservative"]
+                               and not a.in_dict and b.valid and b.in_dict
+                               and b.core.isupper()
+                               and b.core.lower() in lexicon.UPPERCASE_WORDS[b.lang])
+            if not ordinary_target:
+                return keep("abbrev")
         if a.core.lower() in self.exceptions:
             return keep("exception")
 
