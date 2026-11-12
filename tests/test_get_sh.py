@@ -479,7 +479,7 @@ def test_fetch_requires_release_integrity(shell, tmp_path, case, expected):
     data = b'package bytes'
     asset = {'name': 'wayswitch.deb', 'size': len(data),
              'digest': 'sha256:' + hashlib.sha256(data).hexdigest(),
-             'browser_download_url': 'https://github.com/Wetoshkin/WaySwitch/releases/download/v1/wayswitch.deb'}
+             'browser_download_url': 'https://github.com/lethargicpillow/WaySwitch/releases/download/v1/wayswitch.deb'}
     child_env = os.environ.copy()
     if case.startswith('hostile_'):
         directory = tmp_path if case.endswith('cwd') else tmp_path / 'modules'
@@ -522,7 +522,7 @@ set -eu
 TMP="$PWD"
 python3() {{ "$TEST_PYTHON" "$@"; }}
 API=api
-REPO=Wetoshkin/WaySwitch
+REPO=lethargicpillow/WaySwitch
 have() {{ command -v "$1" >/dev/null 2>&1; }}
 say() {{ printf '%s\\n' "$2" >&2; }}
 curl() {{
@@ -627,7 +627,7 @@ TMP="$PWD"
 ATOMIC=0
 FAMILY=source
 API=api
-REPO=Wetoshkin/WaySwitch
+REPO=lethargicpillow/WaySwitch
 PATH="$PWD:$PATH"
 python3() {{ "$TEST_PYTHON" "$@"; }}
 die() {{ printf '%s\\n' "$2" >&2; exit 1; }}
@@ -671,10 +671,10 @@ def test_source_install_uses_selected_release_tag(shell, tmp_path):
     assert (tmp_path / "release.tag").read_text() == "v1.2.3\n"
     assert (tmp_path / "curl.log").read_text().splitlines() == ["api"]
     calls = (tmp_path / "git.log").read_text().splitlines()
-    assert calls[0] == ("ls-remote https://github.com/Wetoshkin/WaySwitch.git "
+    assert calls[0] == ("ls-remote https://github.com/lethargicpillow/WaySwitch.git "
                         "refs/tags/v1.2.3 refs/tags/v1.2.3^{}")
     assert calls[1].startswith(
-        "clone -q --depth 1 --branch v1.2.3 https://github.com/Wetoshkin/WaySwitch.git ")
+        "clone -q --depth 1 --branch v1.2.3 https://github.com/lethargicpillow/WaySwitch.git ")
     assert calls[1].endswith("/src")
     assert calls[2].startswith("-C ") and calls[2].endswith(" rev-parse --verify HEAD")
     sudo = (tmp_path / "sudo.log").read_text().splitlines()
@@ -762,7 +762,7 @@ def test_bad_package_checksum_stops_before_source_or_sudo(shell, tmp_path):
         "size": len(good),
         "digest": "sha256:" + hashlib.sha256(good).hexdigest(),
         "browser_download_url": (
-            "https://github.com/Wetoshkin/WaySwitch/releases/download/v1.2.3/wayswitch.deb"),
+            "https://github.com/lethargicpillow/WaySwitch/releases/download/v1.2.3/wayswitch.deb"),
     }
     commit = "2" * 40
     _prepare_installer_commands(

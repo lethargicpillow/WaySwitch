@@ -20,7 +20,7 @@ from pathlib import Path
 
 from wayswitch.gui import portable
 
-REPO = "Wetoshkin/WaySwitch"
+REPO = "lethargicpillow/WaySwitch"
 API_URL = f"https://api.github.com/repos/{REPO}/releases"
 RELEASES_URL = f"https://github.com/{REPO}/releases"
 # Не чаще раза в сутки: GitHub ограничивает анонимные запросы (60 в час с

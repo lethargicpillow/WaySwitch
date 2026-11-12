@@ -9,7 +9,7 @@ import pytest
 from tools import release_notes
 
 ROOT = release_notes.ROOT
-PROGRESS = "https://github.com/Wetoshkin/WaySwitch/blob/{}/docs/PROGRESS.md"
+PROGRESS = "https://github.com/lethargicpillow/WaySwitch/blob/{}/docs/PROGRESS.md"
 
 SYNTHETIC = """\
 # История изменений

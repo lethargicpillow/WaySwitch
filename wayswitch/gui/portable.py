@@ -11,7 +11,7 @@ from wayswitch.i18n import gettext as _
 FLATPAK_ID = "io.github.Wetoshkin.WaySwitch.Gui"
 APPIMAGE_ID = "io.github.Wetoshkin.WaySwitch.AppImage"
 NATIVE_ID = "io.github.Wetoshkin.WaySwitch.Settings"
-RELEASES_URL = "https://github.com/Wetoshkin/WaySwitch/releases"
+RELEASES_URL = "https://github.com/lethargicpillow/WaySwitch/releases"
 # Английский исходный текст; перевод берётся при показе.
 PACKAGED_UPDATE_TEXT = "Updates through the package manager"
 # Команды и регулярное выражение не переводятся: {64} внутри значения не
