@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wayswitch"
-version = "1.1.4"
+version = "1.1.5"
 description = "Автоисправление раскладки клавиатуры ru/en для Linux на Wayland"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,9 +12,9 @@ license = { text = "MIT AND CC-BY-SA-4.0" }
 dependencies = ["evdev>=1.6", "PyGObject>=3.46"]
 
 [project.urls]
-Repository = "https://github.com/Wetoshkin/WaySwitch"
-Issues = "https://github.com/Wetoshkin/WaySwitch/issues"
-Releases = "https://github.com/Wetoshkin/WaySwitch/releases"
+Repository = "https://github.com/lethargicpillow/WaySwitch"
+Issues = "https://github.com/lethargicpillow/WaySwitch/issues"
+Releases = "https://github.com/lethargicpillow/WaySwitch/releases"
 
 [project.scripts]
 wayswitch = "wayswitch.cli:main"

@@ -3,7 +3,7 @@
   "name": "WaySwitch",
   "description": "Состояние раскладки и печать символов для демона WaySwitch по D-Bus.",
   "shell-version": ["46", "47", "48", "49", "50", "51"],
-  "url": "https://github.com/Wetoshkin/WaySwitch",
+  "url": "https://github.com/lethargicpillow/WaySwitch",
   "version": 7,
-  "version-name": "1.1.4"
+  "version-name": "1.1.5"
 }

@@ -8,8 +8,8 @@
         "Id": "io.github.Wetoshkin.wayswitch",
         "License": "MIT",
         "Name": "WaySwitch",
-        "Version": "1.1.4",
-        "Website": "https://github.com/Wetoshkin/WaySwitch"
+        "Version": "1.1.5",
+        "Website": "https://github.com/lethargicpillow/WaySwitch"
     },
     "KPackageStructure": "Plasma/Applet",
     "X-Plasma-API-Minimum-Version": "6.0",
