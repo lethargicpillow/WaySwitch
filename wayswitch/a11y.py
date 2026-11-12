@@ -218,6 +218,13 @@ class AtspiProbe:
             self._thread = threading.Thread(target=self._run, name="atspi-probe", daemon=True)
             self._thread.start()
 
+    def invalidate(self) -> None:
+        """Смена фокуса: сбросить снимок и начать опрос до первой клавиши."""
+        self._invalidate()
+        # В фоне опрос может уже спать. Одного _wake.set() тогда недостаточно:
+        # первая клавиша иначе вынуждена ждать запуска потока и свежего поля.
+        self.poke()
+
     def _invalidate(self) -> None:
         with self._lock:
             self._generation += 1
@@ -258,7 +265,7 @@ class AtspiProbe:
                 if (self._watcher is None or self._watcher.query_connection is not connection
                         or not self._watcher.live.is_set()):
                     self._drop_watcher()
-                    self._watcher = _watch_focus_events(connection, self._invalidate)
+                    self._watcher = _watch_focus_events(connection, self.invalidate)
                 if not self._watcher.live.is_set():
                     raise RuntimeError("подписка at-spi потеряна")
             if self._stop.is_set():
@@ -782,13 +789,31 @@ class ShellContext(NamedTuple):
     purpose: int = 0
     hints: int = 0
     pid: int = 0
+    # KDE: меняется при активации другого окна даже в том же процессе.
+    window_epoch: int = -1
 
     def protected(self) -> bool:
         return self.modal or self.ime_focus and (self.purpose in (8, 12)
                                                  or bool(self.hints & (64 | 128)))
 
 
+_context_provider: Callable[[], ShellContext | None] | None = None
+
+
+def set_context_provider(provider: Callable[[], ShellContext | None] | None) -> None:
+    """Источник контекста композитора на время работы демона (KDE)."""
+    global _context_provider
+    _context_provider = provider
+
+
 def query_shell_context() -> ShellContext | None:
+    """Контекст композитора; отсутствие доверенного источника не разрешает ввод."""
+    if _context_provider is not None:
+        return _context_provider()
+    return _query_gnome_context()
+
+
+def _query_gnome_context() -> ShellContext | None:
     """Атомарные сведения GNOME; старое расширение отдаёт только идентификаторы."""
     try:
         from gi.repository import Gio, GLib
@@ -833,10 +858,11 @@ def query_shell_app_ids() -> tuple[str, ...]:
         return ()
 
 
-def query_focus() -> FocusSnapshot:
+def query_focus(context_provider=None) -> FocusSnapshot:
     """Приложение в фокусе и признак защищённого ввода (блокирует на D-Bus)."""
     global _CONN
-    context = query_shell_context()
+    context_provider = context_provider or query_shell_context
+    context = context_provider()
     if context is None:
         return FocusSnapshot()
     if context.protected():
@@ -849,7 +875,7 @@ def query_focus() -> FocusSnapshot:
         if not context.app_ids:
             raise
         snap = FocusSnapshot()
-    current = query_shell_context()
+    current = context_provider()
     if current is None:
         return FocusSnapshot()
     if current.protected():

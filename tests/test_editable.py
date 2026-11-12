@@ -1439,3 +1439,134 @@ def test_kde_rejects_snapshot_with_conflicting_shell_identity(kde_native):
     kde_native.focus = kde_native.focus._replace(app_ids=("libreoffice-writer",))
     assert kde_replace(kde_native) == editable.SpanResult("aborted")
     assert kde_native.tree.reads == kde_native.tree.writes == kde_native.committed == []
+
+
+# --- Kate: ordinary Qt text document with a trusted KWin window ----------------
+
+@pytest.fixture
+def kate_native(kde_native, monkeypatch):
+    native = kde_native
+    native.tree.app = "kate"
+    native.tree.field_role = 61
+    native.focus = native.focus._replace(app="kate", window="Untitled — Kate")
+    native.context = a11y.ShellContext(pid=1234, window_epoch=1)
+    native.stopped.append = lambda: 0
+    monkeypatch.setattr(a11y, "query_shell_context", lambda: native.context)
+    return native
+
+
+@pytest.mark.parametrize("prefix", ["", "Another line\n", "Text "])
+def test_kate_native_replaces_exact_range_including_start_of_document(kate_native, prefix):
+    native = kate_native
+    native.tree.text = prefix + SOURCE
+    native.tree.position = len(native.tree.text)
+    assert kde_replace(native) == editable.SpanResult("done", True)
+    assert native.tree.text == prefix + TARGET
+    assert native.tree.position == len(prefix + TARGET)
+    assert native.stopped.fast_switch
+    assert native.tree.writes == [
+        ("insert", len(prefix), TARGET),
+        ("delete", len(prefix) + len(TARGET), len(prefix) + len(TARGET) + len(SOURCE)),
+    ]
+
+
+def test_kate_native_mismatch_does_not_switch_or_write(kate_native):
+    native = kate_native
+    native.tree.text = "Test another "
+    native.tree.position = len(native.tree.text)
+    assert kde_replace(native) == editable.SpanResult("aborted")
+    assert not native.stopped.fast_switch
+    assert not native.tree.writes and not native.committed
+
+
+@pytest.mark.parametrize("change", [
+    lambda n: setattr(n, "context", a11y.ShellContext()),
+    lambda n: setattr(n, "context", a11y.ShellContext(pid=4321, window_epoch=1)),
+    lambda n: setattr(n.tree, "kind", "password"),
+    lambda n: setattr(n.tree, "selections", 1),
+    lambda n: setattr(n.tree, "focused", False),
+    lambda n: setattr(n.stopped, "append", lambda: None),
+])
+def test_kate_native_requires_live_context_and_safe_field(kate_native, change):
+    change(kate_native)
+    assert kde_replace(kate_native) == editable.SpanResult("aborted")
+    assert not kate_native.stopped.fast_switch
+    assert not kate_native.tree.reads and not kate_native.tree.writes
+
+
+def test_kate_missing_editabletext_uses_existing_transport(kate_native):
+    native = kate_native
+    native.tree.interfaces = lambda _node: [a11y.TEXT]
+    assert kde_replace(native) is None
+    assert not native.tree.reads and not native.tree.writes
+
+
+def test_kate_can_prove_missing_text_events_by_readback(kate_native):
+    native = kate_native
+    native.tree.silent_events = True
+    assert kde_replace(native) == editable.SpanResult("done", True)
+    assert native.tree.text == "Test " + TARGET
+
+
+def test_kate_contradictory_events_never_delete_original(kate_native):
+    native = kate_native
+    native.tree.insert_event_start = 0
+    assert kde_replace(native).status == "failed"
+    assert native.tree.text.endswith(SOURCE)
+    assert all(write[0] != "delete" for write in native.tree.writes)
+
+
+def test_kate_native_preserves_physical_append(kate_native):
+    native = kate_native
+    count = [0]
+    native.stopped.append = lambda: count[0]
+
+    def append():
+        native.tree.append("X")
+        count[0] += 1
+
+    native.tree.after_insert = append
+    assert kde_replace(native) == editable.SpanResult("done", True)
+    assert native.tree.text == "Test " + TARGET + "X"
+
+
+@pytest.mark.parametrize("suffix", ["\n", "\n  ", "\n\t  "])
+def test_kate_enter_preserves_newline_indent_and_following_text(kate_native, suffix):
+    native = kate_native
+    native.stopped.after_enter = True
+    native.tree.text = "Lead ghbdtn" + suffix + "tail"
+    native.tree.position = len("Lead ghbdtn" + suffix)
+    assert kde_replace(native, "ghbdtn", "привет") == editable.SpanResult("done", True)
+    assert native.tree.text == "Lead привет" + suffix + "tail"
+    assert native.tree.position == len("Lead привет" + suffix)
+    assert native.tree.writes == [("insert", 5, "привет"), ("delete", 11, 17)]
+
+
+@pytest.mark.parametrize("text", ["Lead ghbdtn", "Lead ghbdtn\nX",
+                                 "Lead xghbdtn\n", "Lead other\n"])
+def test_kate_enter_rejects_unproven_previous_line(kate_native, text):
+    native = kate_native
+    native.stopped.after_enter = True
+    native.tree.text = text
+    native.tree.position = len(text)
+    assert kde_replace(native, "ghbdtn", "привет") == editable.SpanResult("aborted")
+    assert not native.tree.writes and not native.committed
+    assert not native.stopped.fast_switch
+
+
+def test_kate_enter_keeps_original_if_input_arrives_during_insert(kate_native):
+    native = kate_native
+    native.stopped.after_enter = True
+    native.tree.text = "Lead ghbdtn\n  "
+    native.tree.position = len(native.tree.text)
+    count = [0]
+    native.stopped.append = lambda: count[0]
+
+    def append():
+        native.tree.append("X")
+        count[0] += 1
+
+    native.tree.after_insert = append
+    assert kde_replace(native, "ghbdtn", "привет").status == "failed"
+    assert native.tree.text == "Lead приветghbdtn\n  X"
+    assert all(operation[0] != "delete" for operation in native.tree.writes)

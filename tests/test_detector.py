@@ -246,3 +246,92 @@ def test_language_model_load_real_data():
     assert ru.score("привет") > ru.score("ьоыфжз")
     en = LanguageModel.load("en", data_dir=DATA)
     assert en.is_word("hello") and en.score("hello") > en.score("xqzvkw")
+
+
+@pytest.mark.parametrize("target,group", [
+    ("THE", US), ("THEY", US), ("KATE", US), ("ВОТ", RU),
+    ("НО", RU), ("NO", US), ("ТЕСТ", RU),
+])
+def test_uppercase_prose_is_not_an_abbreviation(det, target, group):
+    # Use a controlled vocabulary to isolate the all-caps gate from corpus
+    # coverage and the existing short-word context policy.
+    ru = [("вот", 2000.0), ("но", 2000.0), ("тест", 2000.0)] + RU_WORDS
+    en = [("they", 2000.0), ("kate", 2000.0), ("no", 2000.0)] + EN_WORDS
+    det.models["ru"] = LanguageModel.from_words("ru", ru, RU_ALPHABET, top_n=10)
+    det.models["en"] = LanguageModel.from_words("en", en, EN_ALPHABET, top_n=10)
+    source = RU if group == US else US
+    lang = "en" if group == US else "ru"
+    result = det.decide(typed(target, group), source, group, (lang, lang))
+    assert result.action == "fix", result.reason
+    assert result.target_text == target
+
+
+@pytest.mark.parametrize("target,group", [("THEY", US), ("ВОТ", RU)])
+def test_uppercase_dictionary_collision_keeps_source(det, target, group):
+    source = RU if group == US else US
+    source_lang = "ru" if source == RU else "en"
+    target_lang = "en" if group == US else "ru"
+    keys = typed(target, group)
+    source_word = det.decode(keys, source).lower()
+    det.models[source_lang] = LanguageModel.from_words(
+        source_lang, [(source_word, 100.0)], RU_ALPHABET if source == RU else EN_ALPHABET)
+    det.models[target_lang] = LanguageModel.from_words(
+        target_lang, [(target.lower(), 100.0)], EN_ALPHABET if group == US else RU_ALPHABET)
+    result = det.decide(keys, source, group, (target_lang, target_lang))
+    assert result.action == "keep" and result.reason == "abbrev"
+
+
+@pytest.mark.parametrize("token,group", [("NASA", US), ("API", US), ("ВПН", RU)])
+def test_unknown_uppercase_abbreviation_stays_protected(det, token, group):
+    result = det.decide(typed(token, group), group, RU if group == US else US)
+    assert result.action == "keep"
+
+
+def test_uppercase_exception_still_blocks_dictionary_correction(det):
+    det.exceptions.add("еру")
+    # THE in Russian layout is ЕРУ.
+    result = det.decide(typed("THE", US), RU, US)
+    assert result.action == "keep" and result.reason == "exception"
+
+
+def test_conservative_preserves_uppercase_guard(det):
+    det.sensitivity = SENSITIVITY["conservative"]
+    result = det.decide(typed("THE", US), RU, US)
+    assert result.action == "keep" and result.reason == "abbrev"
+
+
+def test_compound_exact_components_precede_ngrams(det):
+    det.models["ru"] = LanguageModel.from_words(
+        "ru", RU_WORDS + [("дефисы", 1), ("соединители", 1)], RU_ALPHABET)
+    keys = typed("ltabcs-cjtlbybntkb", US)
+    result = det.decide(keys, US, RU, ("en", "en"))
+    assert (result.action, result.target_text, result.reason) == (
+        "fix", "дефисы-соединители", "dict-compound-b")
+    assert not result.b.in_dict
+    assert det.decide(keys, RU, US).reason == "dict-compound-a"
+
+
+def test_compound_known_source_parts_win_even_with_known_target(det):
+    det.models["ru"] = LanguageModel.from_words(
+        "ru", RU_WORDS + [("дефисы", 1), ("соединители", 1)], RU_ALPHABET)
+    det.models["en"] = LanguageModel.from_words(
+        "en", EN_WORDS + [("ltabcs", 1), ("cjtlbybntkb", 1)], EN_ALPHABET)
+    result = det.decide(typed("ltabcs-cjtlbybntkb", US), US, RU)
+    assert (result.action, result.reason) == ("keep", "dict-compound-a")
+
+
+def test_compound_exception_and_technical_markers_precede_components(det):
+    det.models["ru"] = LanguageModel.from_words(
+        "ru", RU_WORDS + [("дефисы", 1), ("соединители", 1)], RU_ALPHABET)
+    det.exceptions.add("ltabcs-cjtlbybntkb")
+    assert det.decide(typed("ltabcs-cjtlbybntkb", US), US, RU).reason == "exception"
+    assert det.decide(typed("ltabcs--cjtlbybntkb", US), US, RU).reason == "tech"
+
+
+def test_compound_partial_source_match_does_not_force_component_fix(det):
+    det.models["ru"] = LanguageModel.from_words(
+        "ru", RU_WORDS + [("дефисы", 1), ("соединители", 1)], RU_ALPHABET)
+    det.models["en"] = LanguageModel.from_words(
+        "en", EN_WORDS + [("ltabcs", 1)], EN_ALPHABET)
+    result = det.decide(typed("ltabcs-cjtlbybntkb", US), US, RU)
+    assert result.reason != "dict-compound-b"

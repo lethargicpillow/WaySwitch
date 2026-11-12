@@ -27,9 +27,9 @@
 
 **Automatic Russian–English keyboard layout correction for Linux on Wayland.**
 
-**1.1.4 — explain diagnostics, Russian/English interface localization and text-replacement stabilization.**
+**1.1.5 — KDE/Wayland improvements: native replacement in Kate, Enter, punctuation and compound words.**
 
-Packages and checksums: [latest published release](https://github.com/Wetoshkin/WaySwitch/releases/latest).
+Packages and checksums: [latest published release](https://github.com/lethargicpillow/WaySwitch/releases/latest).
 See [project status](docs/PROGRESS.md) for completed changes, verification and remaining work.
 
 WaySwitch fixes a word typed in the wrong layout (`ghbdtn` instead of
@@ -109,7 +109,7 @@ The command below is for other distributions.
 2. Paste the command with <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> and press <kbd>Enter</kbd>:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/Wetoshkin/WaySwitch/main/packaging/get.sh | sh
+   curl -fsSL https://raw.githubusercontent.com/lethargicpillow/WaySwitch/v1.1.5/packaging/get.sh | sh
    ```
 
 3. The script detects your distribution, says what it is going to do and
@@ -149,7 +149,7 @@ a release.
 
 Portable settings clients are available. Install and update the
 native WaySwitch service on the host using the command above. Use the service
-and GUI from the same [release](https://github.com/Wetoshkin/WaySwitch/releases).
+and GUI from the same [release](https://github.com/lethargicpillow/WaySwitch/releases).
 The first-run window explains companion
 installation, startup and diagnostics. Settings and pause state are shared.
 

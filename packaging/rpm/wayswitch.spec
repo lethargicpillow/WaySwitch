@@ -11,7 +11,7 @@ Version:        %{ws_version}
 Release:        1%{?dist}
 Summary:        Fixes words typed in the wrong keyboard layout on Wayland (ru/en)
 License:        MIT AND CC-BY-SA-4.0
-URL:            https://github.com/Wetoshkin/WaySwitch
+URL:            https://github.com/lethargicpillow/WaySwitch
 BuildArch:      noarch
 
 Requires:       python3 >= 3.11

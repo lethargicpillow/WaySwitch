@@ -30,7 +30,7 @@ from wayswitch.actuator import (
 from wayswitch.buffer import InputBuffer, KeyPress
 from wayswitch.config import Config, apps_path
 from wayswitch.detector import SENSITIVITY, Detector
-from wayswitch.editable import _libreoffice_component
+from wayswitch.editable import _kate, _libreoffice_component
 from wayswitch.gesture import ShiftGesture, TapKeyGesture
 from wayswitch.selection import convert as convert_selection
 from wayswitch.textops import number_words, transliterate
@@ -187,6 +187,7 @@ class Controller:
         # Поколение контекста: любой сброс делает отложенный done устаревшим,
         # даже если между сбросом и done успел выполниться другой фикс.
         self._context_epoch = 0
+        self._input_serial = 0
         self._require_lock_confirmation = require_lock_confirmation
         self.lock_confirmation_required = require_lock_confirmation
         self.paused = require_lock_confirmation
@@ -229,10 +230,8 @@ class Controller:
     def _terminator_keys(config: Config) -> set[int]:
         """Клавиши, завершающие слово помимо пробела.
 
-        Tab и Enter (fix_on_tab / fix_on_enter) отключены: к моменту фикса
-        Tab уже выбрал автодополнение, а Enter отправил сообщение, и
-        Backspace-ы стёрли бы не то. Ключи остаются в конфиге, чтобы старые
-        config.toml читались, но ничего не включают.
+        Tab отключён. Enter обрабатывается отдельно, только через проверенный
+        диапазон в Kate; обычный буфер после него по-прежнему сбрасывается.
         """
         del config
         return set()
@@ -439,7 +438,9 @@ class Controller:
                 self._replay_focus_queue()
         if fresh is not None:
             self._focus_wake_attempted = False
+            log.debug("пробуждение фокуса: подтверждён")
             return "woke", fresh
+        log.debug("пробуждение фокуса: %s", why)
         if why == "cancelled":
             return "cancelled", None
         if recent_unknown:
@@ -466,6 +467,8 @@ class Controller:
         return True
 
     def _on_key(self, code: int, value: int, device_id: int) -> None:
+        if value != 0:
+            self._input_serial += 1
         if self.screen_locked() or self.lock_confirmation_required:
             if value == 0:
                 self.buffer.note_release(code, device_id)
@@ -566,6 +569,37 @@ class Controller:
             if gesture:
                 self._dispatch_gesture(gesture)
             return
+        punct_word = None
+        if (value == 1 and not self._skip_word and not self.buffer.command_held()
+                and self.config.general.punct_fix and self._auto_allowed()
+                and self.probe is not None and _kate(self.probe.snapshot())):
+            groups = self._groups()
+            if groups is not None:
+                current, other = groups
+                key = KeyPress(code, self.buffer.shift_held(), self.buffer.caps)
+                a, b = (self.keymap.decode([key], group) for group in groups)
+                # Restrict to shared punctuation keys, never a letter or
+                # bracket. A slash in a known word/path is not a boundary fix.
+                if (a, b) in {("!", "!"), ("/", "."), (".", "/"),
+                              ("?", ","), (",", "?")}:
+                    if self.buffer.expire(now):
+                        self._clear_context()
+                    word = self.buffer.current_word()
+                    if len(word) >= 3 and word != self._hold_keys:
+                        punct_word = word + [key]
+        enter_word = None
+        if (value == 1 and code in (kc.KEY_ENTER, kc.KEY_KPENTER)
+                and self.config.general.fix_on_enter and not self._skip_word
+                and not self.buffer.command_held() and not self.buffer.shift_held()
+                and not self.paused and not self.locked and self.probe is not None):
+            # Keep the word before feed() clears the phrase. Enter remains a
+            # reset for the buffer, including on every unsupported application.
+            if self.buffer.expire(now):
+                self._clear_context()
+            snap = self.probe.snapshot()
+            if (_kate(snap) and snap.field is not None
+                    and snap.protection(now) is False):
+                enter_word = self.buffer.current_word()
         if value == 1 and self._skip_word and (code in kc.RESET_KEYS or code in kc.META_KEYS):
             self._skip_word = False  # Enter, стрелки, Esc: каретка ушла, слово кончилось
         if value == 1 and self.buffer.is_empty():
@@ -588,16 +622,22 @@ class Controller:
             return
         if self._skip_word:
             if value == 1 and code == kc.KEY_SPACE:
+                log.debug("слово пропущено: буфер не подтверждён до границы слова")
                 self._skip_word = False
                 self.buffer.reset()
                 self._clear_context()
             return
+        if punct_word and self._on_punctuation_word(punct_word, device_id, code):
+            return
         if event is None:
             return
         if event.kind == "reset":
+            context, held = self._context_tuple(), self._hold_keys
             self._clear_context()
             self._skip_word = False
             self._hold_keys = None
+            if enter_word and enter_word != held and self._auto_allowed():
+                self._on_enter_word(enter_word, device_id, code, context)
             return
         if event.reset_before:
             self._clear_context()  # буфер очищен по таймауту перед этой клавишей
@@ -695,6 +735,7 @@ class Controller:
         self._emit_status()
 
     def on_resync(self, device_id: int, held) -> None:
+        self._input_serial += 1
         if self.screen_locked() or self.locked or self.lock_confirmation_required:
             self.buffer.resync(device_id, (c for c in held if c in kc.MODIFIER_KEYS))
             return
@@ -705,6 +746,7 @@ class Controller:
         self.buffer.resync(device_id, held)
 
     def on_device_gone(self, device_id: int) -> None:
+        self._input_serial += 1
         if self.busy:
             self._busy_reset = True
         self.buffer.device_gone(device_id)
@@ -788,6 +830,15 @@ class Controller:
         same_window = old_window == snap.window
         if old is None or old == scope and same_window:
             return True
+        # A title is mutable metadata, not an editor identity. In Kate an
+        # unsaved document is named after its first line and its window name
+        # changes while typing. A confirmed field in the same generation
+        # remains the same input target. Preserve the LibreOffice title
+        # guard: its component identity and recreated Calc fields use it.
+        if (old == scope and snap.field is not None and protection is False
+                and snap.app.casefold() not in {"soffice", "soffice.bin", "libreoffice"}):
+            log.debug("привязка буфера сохранена: изменился только заголовок")
+            return True
         old_probe, _, old_field, old_app, old_protection = old
         # Редактор ячейки Calc создаётся заново на каждый вход, поэтому во
         # время набора поле успевает побывать None и смениться (grid → новый
@@ -808,6 +859,8 @@ class Controller:
                  and (old_field is None or old_app is None
                       or same_window and _libreoffice_component(snap) == "calc"))
         if generation_only or carry:
+            log.debug("привязка буфера: нужна проверяемая замена (%s)",
+                      "поколение" if generation_only else "поздний фокус")
             self._provisional_binding = True
             return True
         changed_field = (old_probe is self.probe and old_protection is not None
@@ -818,6 +871,10 @@ class Controller:
             self._skip_word = self._lost_input
         else:
             self._skip_word |= bool(self.buffer.current_word()) or self._lost_input
+        log.debug("привязка буфера сброшена: поле изменилось=%s, пропуск=%s, "
+                  "приложение=%s, поколение=%s→%s, заголовок изменился=%s, "
+                  "защита=%s→%s", changed_field, self._skip_word, snap.app,
+                  old[1], snap.generation, not same_window, old_protection, protection)
         self._provisional_binding = False
         self.buffer.reset()  # физически зажатые клавиши остаются учтены
         self._clear_context()
@@ -978,6 +1035,50 @@ class Controller:
                                trigger=(device_id, code), done=self._context_done(other))
             return
         self.context.append(decision.a.lang if decision.a.in_dict else None)
+
+    def _on_punctuation_word(self, keys: list[KeyPress], device_id: int, code: int) -> bool:
+        """Native-only completion on an unambiguous physical punctuation key."""
+        groups = self._groups()
+        if (groups is None or not self._auto_allowed() or self._edit_guard_active()
+                or self._focus_blocks() or self._pending):
+            return False
+        current, other = groups
+        decision = self.detector.decide(
+            keys, current, other, self._context_tuple(),
+            two_capitals=self.config.general.two_capitals_fix and not self.buffer.caps)
+        # No speculative n-gram correction at a slash or punctuation boundary.
+        if (decision.action != "fix"
+                or decision.reason not in {"dict-b", "dict-compound-b"}
+                or decision.a.in_dict or not decision.b.tail):
+            return False
+        self.buffer.reset()
+        self._clear_context()
+        self._hold_keys = None
+        self._last_fix = None
+        log.debug("решение punctuation: fix (%s)", decision.reason)
+        self._schedule_fix(keys, 0, other, decision.target_text,
+                           manual=False, reason="punctuation:" + decision.reason,
+                           group_before=current, trigger=(device_id, code),
+                           after_punct=True, done=self._context_done(other))
+        return True
+
+    def _on_enter_word(self, keys: list[KeyPress], device_id: int, code: int,
+                       context: tuple[str | None, str | None]) -> None:
+        """Only a verified Kate document may correct the previous line."""
+        self._last_fix = None
+        groups = self._groups()
+        if groups is None or self._edit_guard_active() or self._focus_blocks():
+            return
+        current, other = groups
+        decision = self.detector.decide(
+            keys, current, other, context,
+            two_capitals=self.config.general.two_capitals_fix and not self.buffer.caps)
+        log.debug("решение Enter: %s (%s)", decision.action, decision.reason)
+        if decision.action == "fix":
+            self._schedule_fix(keys, 0, other, decision.target_text,
+                               manual=False, reason="enter:" + decision.reason,
+                               group_before=current, trigger=(device_id, code),
+                               after_enter=True)
 
     def _on_letter(self, keys: list[KeyPress], device_id: int, code: int) -> None:
         groups = self._groups()
@@ -1564,7 +1665,8 @@ class Controller:
                       trigger: tuple[int, int] | None = None,
                       done: Callable[[bool, bool], None] | None = None,
                       span: bool = False, caps_off: bool = False, secret: bool = False,
-                      source_text: str | None = None) -> None:
+                      source_text: str | None = None, after_enter: bool = False,
+                      after_punct: bool = False) -> None:
         """Отложить _apply_fix через self.schedule.
 
         Решение принято по снимку буфера; к моменту исполнения пользователь
@@ -1576,23 +1678,35 @@ class Controller:
         capture_focus = self._buffer_focus
         secret = secret or capture_focus[-1] is not False or self._secret_focus()
         self._pending += 1
+        scheduled_at = time.monotonic()
+        serial, context_epoch = self._input_serial, self._context_epoch
 
         def run() -> None:
             self._pending -= 1
             ok = False
             outcome: dict = {}
+            queue_ms = round((time.monotonic() - scheduled_at) * 1000)
             try:
                 if self._focus_waiting:
                     self._focus_wait_boundary = True
                 if self.busy:
+                    outcome["stage"] = "queue-busy"
                     log.info("исправление %s отменено: другое исправление в работе", reason)
                     return
                 if whole_phrase and self.buffer.expire(self.clock()):
+                    outcome["stage"] = "queue-expired"
                     log.info("исправление %s отменено: фраза устарела", reason)
                     return
                 if not self._sync_focus() or self._buffer_focus != capture_focus:
+                    outcome["stage"] = "queue-focus"
+                    log.debug("исправление отменено: фокус изменился до исполнения")
                     return
-                if whole_phrase:
+                if after_enter or after_punct:
+                    unchanged = (self._input_serial == serial
+                                 and self._context_epoch == context_epoch
+                                 and self.buffer.is_empty() and self._auto_allowed()
+                                 and not self._focus_blocks())
+                elif whole_phrase:
                     unchanged = self.buffer.phrase() == snapshot
                 elif span:
                     # Откат исправления с пробелом внутри («кем бы»): сверяем
@@ -1602,17 +1716,35 @@ class Controller:
                 else:
                     unchanged = self.buffer.last_word_with_tail() == (snapshot, tail)
                 if not unchanged:
+                    outcome["stage"] = "queue-buffer"
                     log.info("исправление %s отменено: буфер изменился", reason)
                     return
                 ok = self._apply_fix(snapshot, tail, target_group, text, manual=manual,
                                      reason=reason, group_before=group_before,
                                      whole_phrase=whole_phrase, switch=switch, trigger=trigger,
                                      span=span, caps_off=caps_off, secret=secret, outcome=outcome,
-                                     source_text=source_text)
+                                     source_text=source_text, after_enter=after_enter,
+                                     after_punct=after_punct)
             finally:
+                log.debug("диагностика фикса: reason=%s ok=%s queue_ms=%d "
+                          "stage=%s transport=%s native=%s abort=%s "
+                          "release_ms=%s execute_ms=%s committed=%s",
+                          reason, ok, queue_ms, outcome.get("stage", "preflight"),
+                          outcome.get("transport", "none"),
+                          outcome.get("native_status", "not-attempted"),
+                          outcome.get("abort_reason", "none"),
+                          outcome.get("release_ms", "-"), outcome.get("execute_ms", "-"),
+                          outcome.get("committed", False))
                 if done is not None:
                     done(ok, outcome.get("secret", secret))
                 self._run_pending_gesture()
+                replay_word = outcome.get("replay_word")
+                if (ok and replay_word is not None and not self.busy and not self._pending
+                        and not self._skip_word and self._auto_allowed()
+                        and self.backend.current() == target_group and self._sync_focus()
+                        and self.buffer.last_word_with_tail() == (replay_word[0], 1)):
+                    log.debug("обработка завершённого слова после native-replay")
+                    self._on_word(*replay_word)
 
         self.schedule(run)
 
@@ -1684,11 +1816,13 @@ class Controller:
             self.sleep(0.02)
         return None
 
-    def _native_append_count(self) -> int | None:
+    def _native_append_count(self, ignore_release=None) -> int | None:
         if not self.busy or self._busy_reset or self._operation_invalidated:
             return None
         count = 0
-        for code, value, _device in self._busy_keys:
+        for code, value, device in self._busy_keys:
+            if value == 0 and (device, code) == ignore_release:
+                continue
             if value not in (0, 1):
                 return None
             if code in kc.SHIFT_KEYS:
@@ -1723,7 +1857,8 @@ class Controller:
             return None
         return snap
 
-    def _blocking_keys_held(self, trigger: tuple[int, int] | None) -> bool:
+    def _blocking_keys_held(self, trigger: tuple[int, int] | None,
+                            *, ignore_shift: bool = False) -> bool:
         """Есть ли зажатые клавиши, мешающие печати, кроме самого триггера.
 
         Триггер не считается: его key-up мог ещё не дойти, и его отдельно ждёт
@@ -1735,16 +1870,18 @@ class Controller:
         held = self.buffer.held_physical()
         if trigger is not None:
             held = held - {trigger}
-        return bool({code for _, code in held} - kc.COMMAND_MODIFIERS)
+        ignored = kc.COMMAND_MODIFIERS | (kc.SHIFT_KEYS if ignore_shift else set())
+        return bool({code for _, code in held} - ignored)
 
-    def _wait_release(self, trigger: tuple[int, int] | None = None) -> bool:
+    def _wait_release(self, trigger: tuple[int, int] | None = None,
+                      *, ignore_shift: bool = False) -> bool:
         # Дедлайн — по настоящим часам (time.monotonic), а не по self.clock:
         # self.clock в тестах подменяется управляемым вручную фейком и не тикает
         # сам по себе внутри этого цикла ожидания, поэтому дедлайн на нём
         # никогда не наступил бы. Здесь же мы ждём реальное железо (пока
         # физически отпустят клавиши), так что нужно настоящее время.
         deadline = time.monotonic() + RELEASE_WAIT
-        while self._blocking_keys_held(trigger):
+        while self._blocking_keys_held(trigger, ignore_shift=ignore_shift):
             if time.monotonic() > deadline:
                 return False
             self.pump()
@@ -1774,7 +1911,11 @@ class Controller:
                    whole_phrase: bool = False, switch: bool = True,
                    trigger: tuple[int, int] | None = None, span: bool = False,
                    caps_off: bool = False, secret: bool = False,
-                   outcome: dict | None = None, source_text: str | None = None) -> bool:
+                   outcome: dict | None = None, source_text: str | None = None,
+                   after_enter: bool = False, after_punct: bool = False) -> bool:
+        outcome = {} if outcome is None else outcome
+        native_boundary = after_enter or after_punct
+        outcome["stage"] = "layout-check"
         # Бэкенд может ошибаться насчёт текущей раскладки (IBus на GNOME 46+).
         # Проверяем ДО плана: после Backspace-ов откатывать уже нечего.
         if self._groups() is None or self.backend.current() != group_before:
@@ -1784,6 +1925,7 @@ class Controller:
             log.error("исправление отменено: бэкенд %s ошибается насчёт раскладки "
                       "(включите расширение GNOME Shell)", getattr(self.backend, "name", "?"))
             return False
+        outcome["stage"] = "plan"
         switch = switch or bool(getattr(self.backend, "always_switch", False))
         plan = plan_fix(len(keys) + tail, text, target_group, self.keymap, self.buffer.caps,
                         switch=switch, caps_off=caps_off)
@@ -1791,7 +1933,10 @@ class Controller:
             log.warning("не могу набрать текст в группе %s", target_group)
             return False
         # До границы слова человек продолжает печатать: клавиатурная замена не атомарна.
-        plan.require_verified = self._provisional_binding or reason in {"early", "url-early"}
+        plan.require_verified = (native_boundary or self._provisional_binding
+                                 or reason in {"early", "url-early"})
+        plan.native_after_enter = after_enter
+        log.debug("исполнение %s: проверяемая замена=%s", reason, plan.require_verified)
         original = (source_text if source_text is not None
                     else self.keymap.decode(keys, group_before))
         if self.dry_run:
@@ -1799,10 +1944,31 @@ class Controller:
             return False
         plan.source_text = original + " " * tail
         plan.focus = self.probe.snapshot() if self.probe is not None else None
+        if native_boundary and not _kate(plan.focus):
+            return False
+        if after_punct:
+            # Native-only punctuation already exists in the editor. Do not
+            # emit synthetic modifier releases or wait for physical Shift:
+            # the verified range write is independent of keyboard modifiers.
+            # require_verified above prevents either keyboard or text fallback.
+            plan.steps = [step for step in plan.steps
+                          if not isinstance(step, ReleaseModifiers)]
         secret = secret or self._secret_focus()
-        outcome = {} if outcome is None else outcome
         outcome["secret"] = secret
         expired_phrase = False
+        # Native Kate proves the exact source span and never synthesizes a space.
+        # Only the keyboard fallback needs the physical space to be released.
+        native_space = (not manual and not whole_phrase and not span and not caps_off
+                        and tail == 1 and switch and trigger is not None
+                        and trigger[1] == kc.KEY_SPACE and _kate(plan.focus)
+                        and callable(getattr(self.typist, "replace_span", None)))
+
+        def wait_trigger_for_fallback() -> bool:
+            begin = time.monotonic()
+            ready = self._wait_trigger_release(trigger)
+            outcome["release_ms"] = outcome.get("release_ms", 0) + round(
+                (time.monotonic() - begin) * 1000)
+            return ready
 
         def before_write() -> bool:
             # Между решением и первой стирающей клавишей прошли ожидание
@@ -1827,6 +1993,7 @@ class Controller:
         started = self.clock()
         try:
             if self._provisional_binding and self.probe is not None:
+                outcome["stage"] = "focus-refresh"
                 fresh = self._refresh_focus_for_verified(plan.focus)
                 if fresh is not None:
                     plan.focus = fresh
@@ -1835,21 +2002,38 @@ class Controller:
                     self._buffer_focus = (self.probe, fresh.generation, fresh.field,
                                           fresh.app, fresh.protection(self.clock()))
                     self._buffer_window = fresh.window
-            if (self._abort_requested or self._busy_reset or self._operation_invalidated
-                    or self.paused or self.locked or self.screen_locked()
-                    or not self._wait_release(trigger)
-                    or not self._wait_trigger_release(trigger)):
+            outcome["stage"] = "input-guard"
+            release_started = time.monotonic()
+            blocked = (self._abort_requested or self._busy_reset or self._operation_invalidated
+                       or self.paused or self.locked or self.screen_locked())
+            if not blocked:
+                outcome["stage"] = "wait-release"
+                blocked = not (self._wait_release(trigger, ignore_shift=True)
+                               if after_punct else self._wait_release(trigger))
+            if not blocked and not native_space and not native_boundary:
+                outcome["stage"] = "wait-trigger-release"
+                blocked = not self._wait_trigger_release(trigger)
+            outcome["release_ms"] = round((time.monotonic() - release_started) * 1000)
+            if blocked:
+                outcome["abort_reason"] = (
+                    "held-key" if outcome["stage"] in {"wait-release", "wait-trigger-release"}
+                    else "input-guard")
                 log.info("исправление отменено: изменилось состояние ввода")
                 result = ABORTED
             else:
+                outcome["stage"] = "execute"
                 result = execute(plan, self.typist, self.backend, abort=self._abort,
                                  key_delay=self.config.typing.key_delay_ms / 1000.0,
                                  sleep=self.sleep,
                                  restore_group=group_before if switch else None,
-                                 hold=self._wait_shift_released, outcome=outcome, stop=self._stop,
-                                 native_append=self._native_append_count,
+                                 hold=None if after_punct else self._wait_shift_released,
+                                 outcome=outcome, stop=self._stop,
+                                 native_append=(lambda: self._native_append_count(trigger))
+                                 if native_boundary else self._native_append_count,
                                  native_focus=self._native_focus_snapshot,
-                                 before_write=before_write if whole_phrase else None)
+                                 before_write=before_write if whole_phrase else None,
+                                 before_fallback=(wait_trigger_for_fallback
+                                                  if native_space else None))
         except Exception as exc:  # noqa: BLE001 — execute сам ловит, это страховка
             log.error("исправление %s: ошибка %s", reason, type(exc).__name__)
             result = "failed"
@@ -1860,6 +2044,7 @@ class Controller:
             # исправление (светодиод подтвердит событием клавиатуры).
             self.buffer.set_caps(False)
         if not self._sync_focus() or self._operation_invalidated:
+            outcome["stage"] = "post-focus"
             self._busy_reset = True
             result = ABORTED
         lost, self._lost_input = self._lost_input, False
@@ -1877,12 +2062,19 @@ class Controller:
                 self._clear_context()
             lost = False
         if result == ABORTED and not interrupted:
+            # Без записи в поле физические события снова принадлежат исходному
+            # буферу. Если за время отмены закончилось ещё одно слово, не теряем
+            # его границу. Исправляем только последнее слово у самой каретки.
+            can_retry_word = (not manual and not whole_phrase and not span
+                              and not self._provisional_binding
+                              and not self._skip_word
+                              and self.backend.current() == group_before)
             if self._provisional_binding:
                 # Буфер собран при неподтверждённой привязке. Если слово уже
                 # закончилось пробелом (tail), пропускать следующее нельзя:
                 # его наберут в подтверждённом поле. Для незаконченного слова
                 # (жест без пробела) безопаснее дождаться границы.
-                if tail == 0:
+                if tail == 0 and not native_boundary:
                     self._skip_word = True
                 self._provisional_binding = False
                 self.buffer.reset()
@@ -1892,14 +2084,26 @@ class Controller:
             # допечатал. Досылаем эти нажатия в буфер с тем состоянием
             # зажатых клавиш, что было на входе, — как будто исправления не было.
             self.buffer.restore_held(self._busy_held)
+            next_word = None
             for code, value, device_id in busy_keys:
-                self.buffer.feed(code, value, device_id, self.clock())
+                event = self.buffer.feed(code, value, device_id, self.clock())
+                if event is not None:
+                    if event.reset_before or event.kind == "reset":
+                        self._clear_context()
+                        can_retry_word = False
+                    next_word = (list(event.keys), device_id, code) \
+                        if event.kind == "word" else None
             log.info("исправление %s: %s", reason, result)
             self.gesture.reset()
             self._pending_gesture = None
             self._pending_after = None
             if not outcome.get("expired"):
                 self._emit_status()
+            if (can_retry_word and next_word is not None
+                    and self._auto_allowed() and not self._skip_word
+                    and self.buffer.last_word_with_tail() == (next_word[0], 1)):
+                log.debug("обработка завершённого слова после отмены")
+                self._on_word(*next_word)
             return False
         if lost:
             self._last_fix = None
@@ -1931,7 +2135,10 @@ class Controller:
         outcome["secret"] = secret
         new_keys = [KeyPress(code, shift) for code, shift in
                     keys_for_typing(text, target_group, self.keymap, False) or []]
-        if whole_phrase:
+        if native_boundary:
+            self.buffer.reset()  # completed boundary, not a new partial word
+            self._last_fix = None
+        elif whole_phrase:
             self.buffer.replace_all(new_keys)
         elif span:
             self.buffer.replace_tail(len(keys) + tail, new_keys)
@@ -1948,7 +2155,7 @@ class Controller:
                 self._last_fix = None
         else:
             self.stats["corrections"] += 1
-            if not lost:
+            if not lost and not native_boundary:
                 self._last_fix = LastFix(list(keys), word_keys, group_before, self.clock(),
                                          end=fixed_end,
                                          early=reason == "early", secret=secret,
@@ -1956,10 +2163,21 @@ class Controller:
         if replay:
             # Текст уже в приложении; восстанавливаем только учёт нажатий и отмену.
             self.buffer.restore_held(self._busy_held)
+            next_word = None
             for code, value, device_id in busy_keys:
                 event = self.buffer.feed(code, value, device_id, self.clock())
-                if event is not None and event.kind == "word":
-                    self._remember_fix_word(event.keys)
+                if event is not None:
+                    if event.reset_before or event.kind == "reset":
+                        self._clear_context()
+                    next_word = ((list(event.keys), device_id, code)
+                                 if event.kind == "word" else None)
+                    if next_word is not None:
+                        self._remember_fix_word(event.keys)
+            # Do not revisit earlier words: only the last complete word at the
+            # caret is eligible, after the previous correction's done callback.
+            if (not manual and next_word is not None
+                    and self.buffer.last_word_with_tail() == (next_word[0], 1)):
+                outcome["replay_word"] = next_word
         if self.on_fixed:
             self.on_fixed(manual)
         if self.on_corrected and not secret and not self._secret_focus():

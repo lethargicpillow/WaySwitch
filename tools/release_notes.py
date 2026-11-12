@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CHANGELOG = ROOT / "CHANGELOG.md"
-PROGRESS_URL = "https://github.com/Wetoshkin/WaySwitch/blob/{tag}/docs/PROGRESS.md"
+PROGRESS_URL = "https://github.com/lethargicpillow/WaySwitch/blob/{tag}/docs/PROGRESS.md"
 
 _HEADING = re.compile(r"^##[ \t]+\[([^\]\n]+)\](?:[ \t]+.*)?$", re.MULTILINE)
 
@@ -28,7 +28,7 @@ _TEMPLATE = """\
 вставьте команду сочетанием Ctrl+Shift+V и нажмите Enter:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Wetoshkin/WaySwitch/main/packaging/get.sh | sh
+curl -fsSL https://raw.githubusercontent.com/lethargicpillow/WaySwitch/{tag}/packaging/get.sh | sh
 ```
 
 Скрипт сам определит дистрибутив, покажет план и спросит подтверждение.
@@ -114,7 +114,7 @@ def notes_for(text: str, tag: str) -> str:
         raise ReleaseNotesError(f"раздел CHANGELOG для тега {actual_tag} пуст")
     progress = PROGRESS_URL.format(tag=actual_tag)
     return (f"## Изменения в {version}\n\n{section}\n\n"
-            f"{_TEMPLATE.format(progress_url=progress)}").rstrip() + "\n"
+            f"{_TEMPLATE.format(progress_url=progress, tag=actual_tag)}").rstrip() + "\n"
 
 
 def render(tag: str, changelog: Path = CHANGELOG) -> str:

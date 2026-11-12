@@ -1086,6 +1086,24 @@ def test_key_typed_before_first_backspace_is_kept_in_buffer(env):
     assert [c for c, _ in env["typist"].taps()].count(kc.KEY_BACKSPACE) == len("gjrf ")
 
 
+def test_complete_next_word_during_clean_abort_is_processed(env):
+    # Весь следующий токен пришёл до первой стирающей клавиши.
+    # После безопасной отмены его пробел должен снова запустить детектор.
+    ctrl = env["ctrl"]
+
+    def next_word():
+        for ch in "gjrf ":
+            code, shift = env["km"].key_for(ch, US)
+            assert not shift
+            ctrl.on_key(code, 1, 1)
+            ctrl.on_key(code, 0, 1)
+
+    reenter_during_fix(env, next_word)
+    type_text(env, "ghbdtn ")
+    assert env["corrected"] == [("gjrf", "пока", False)]
+    assert [c for c, _ in env["typist"].taps()].count(kc.KEY_BACKSPACE) == len("gjrf ")
+
+
 def test_key_typed_after_first_backspace_skips_rest_of_word(env):
     # После точки невозврата буква легла посреди перепечатки: слово на экране
     # и в буфере разошлись — до пробела его не трогаем ни авто, ни жестом.
@@ -1819,6 +1837,89 @@ def test_verified_focus_wait_honors_cancellation(env, event):
     assert not env["corrected"]
 
 
+class RenamingEditorProbe(SafeProbe):
+    """Unsaved editor titles follow the first line without a focus change."""
+
+    def __init__(self, clock):
+        super().__init__(clock)
+        self.app = "kate"
+        self.field = (":1.1", "/document")
+        self.generation = 7
+        self.title = "Untitled — Kate"
+        self.password = False
+
+    def snapshot(self):
+        return FocusSnapshot(self.app, self.password, self.clock(), field=self.field,
+                             generation=self.generation, window=self.title)
+
+    def poke(self):
+        pass
+
+
+@pytest.mark.parametrize("app", ["kate", "editor"])
+@pytest.mark.parametrize("source,target,group", [
+    ("ghbdtn", "привет", US), ("руддщ", "hello", RU),
+])
+def test_mutable_window_title_does_not_discard_first_word(env, app, source, target, group):
+    ctrl = env["ctrl"]
+    probe = RenamingEditorProbe(env["clock"])
+    probe.app = app
+    ctrl.set_probe(probe)
+    env["backend"].current_index = group
+    queue = deferred(env)
+    for index, char in enumerate(source):
+        type_text(env, char)
+        # The AT-SPI window name changes after each first-line character.
+        probe.title = source[:index + 1] + " — Editor"
+    type_text(env, " ")
+    probe.title += " *"
+    drain(queue)
+    assert env["corrected"] == [(source, target, False)]
+    assert typed_text(env) == chr(8) * (len(source) + 1) + target + " "
+
+
+def test_kate_native_fix_survives_title_update_during_replacement(env):
+    ctrl = env["ctrl"]
+    probe = RenamingEditorProbe(env["clock"])
+    ctrl.set_probe(probe)
+
+    class RenamingNative(NativeTypist):
+        def replace_span(self, focus, source, target, begin, stop):
+            from wayswitch.editable import SpanResult
+            assert begin()
+            probe.title = "привет — Kate"
+            assert not stop()
+            self.native.append((source, target))
+            return SpanResult("done", True)
+
+    native = RenamingNative()
+    ctrl.typist = env["typist"] = native
+    type_text(env, "ghbdtn ")
+    assert native.native == [("ghbdtn ", "привет ")]
+    assert env["corrected"] == [("ghbdtn", "привет", False)]
+    assert not native.taps()
+
+
+@pytest.mark.parametrize("change", ["generation", "field", "password"])
+def test_title_change_never_hides_real_focus_change(env, change):
+    ctrl = env["ctrl"]
+    probe = RenamingEditorProbe(env["clock"])
+    ctrl.set_probe(probe)
+    queue = deferred(env)
+    type_text(env, "ghbdtn ")
+    assert len(queue) == 1
+    probe.title = "Another document — Kate"
+    if change == "generation":
+        probe.generation += 1
+    elif change == "field":
+        probe.field = (":1.1", "/other")
+    else:
+        probe.password = True
+    drain(queue)
+    assert not env["corrected"]
+    assert not env["typist"].taps()
+
+
 def test_partial_word_never_crosses_writer_windows(env):
     class WindowsProbe(TwoFieldsProbe):
         def snapshot(self):
@@ -1876,3 +1977,266 @@ def test_phrase_expiring_during_layout_ack_never_writes_text(env, native):
     assert not env["typist"].taps()
     assert not env["corrected"]
     assert ctrl.stats["manual"] == 0
+
+
+def test_kate_native_space_can_replace_before_physical_key_up(env):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl, _, queue, trigger = start_held_trigger_fix(env, "ghbdtn", US)
+
+    class WhileHeld(NativeTypist):
+        def replace_span(self, focus, source, target, begin, stop):
+            assert trigger in ctrl.buffer.held_physical()
+            return super().replace_span(focus, source, target, begin, stop)
+
+    ctrl.typist = env["typist"] = native = WhileHeld()
+    drain(queue)
+    assert native.native == [("ghbdtn ", "привет ")]
+    assert native.taps() == []
+    assert trigger in ctrl.buffer.held_physical()
+    release_key(ctrl, trigger)
+
+
+def test_kate_native_fallback_still_waits_for_physical_space(env):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl, typist, queue, trigger = start_held_trigger_fix(env, "ghbdtn", US)
+    attempted = []
+
+    def decline(*args):
+        assert trigger in ctrl.buffer.held_physical()
+        attempted.append(True)
+        return None
+
+    typist.replace_span = decline
+
+    def pump():
+        if attempted and trigger in ctrl.buffer.held_physical():
+            release_key(ctrl, trigger)
+
+    ctrl.pump = pump
+    drain(queue)
+    assert attempted == [True]
+    assert typist.suppressed == []
+    assert env["corrected"] == [("ghbdtn", "привет", False)]
+    assert typed_text(env).endswith("привет ")
+
+
+def test_native_replay_reconsiders_last_completed_word(env):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl.config.general.early_switch = False
+    queue = deferred(env)
+
+    class AppendingNative(NativeTypist):
+        def replace_span(self, focus, source, target, begin, stop):
+            from wayswitch.editable import SpanResult
+            assert begin()
+            self.native.append((source, target))
+            if len(self.native) == 1:
+                # Current layout has already changed to RU. The next word
+                # is hello typed in that layout while the native fix runs.
+                for ch in "руддщ ":
+                    code, shift = env["km"].key_for(ch, RU)
+                    assert not shift
+                    ctrl.on_key(code, 1, 2)
+                    ctrl.on_key(code, 0, 2)
+            return SpanResult("done", True)
+
+    ctrl.typist = env["typist"] = native = AppendingNative()
+    type_text(env, "ghbdtn ")
+    drain(queue)
+    assert native.native == [("ghbdtn ", "привет "), ("руддщ ", "hello ")]
+    assert env["corrected"] == [("ghbdtn", "привет", False), ("руддщ", "hello", False)]
+    assert native.taps() == []
+
+
+@pytest.mark.parametrize("key", [kc.KEY_ENTER, kc.KEY_KPENTER])
+def test_kate_enter_native_only_keeps_new_line_buffer_empty(env, key):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl.config.general.fix_on_enter = True
+    ctrl.config.general.early_switch = False
+
+    class EnterNative(NativeTypist):
+        def replace_span(self, focus, source, target, begin, stop):
+            assert stop.after_enter is True
+            return super().replace_span(focus, source, target, begin, stop)
+
+    ctrl.typist = env["typist"] = native = EnterNative()
+    type_text(env, "ghbdtn")
+    tap(env, key)
+    assert native.native == [("ghbdtn", "привет")]
+    assert env["backend"].current() == RU
+    assert not ctrl.buffer.phrase() and ctrl._last_fix is None
+    assert native.taps() == []
+
+
+@pytest.mark.parametrize("app,enabled,decline", [
+    ("kate", False, False), ("editor", True, False), ("kate", True, True),
+])
+def test_enter_never_uses_keyboard_fallback(env, app, enabled, decline):
+    ctrl = env["ctrl"]
+    probe = RenamingEditorProbe(env["clock"])
+    probe.app = app
+    ctrl.set_probe(probe)
+    ctrl.config.general.fix_on_enter = enabled
+    ctrl.config.general.early_switch = False
+    native = NativeTypist()
+    if decline:
+        native.replace_span = lambda *_: None
+    ctrl.typist = env["typist"] = native
+    type_text(env, "ghbdtn")
+    tap(env, kc.KEY_ENTER)
+    assert not native.native and not native.taps()
+    assert env["backend"].current() == US
+
+
+def test_kate_enter_queued_fix_rejects_new_input(env):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl.config.general.fix_on_enter = True
+    ctrl.config.general.early_switch = False
+    ctrl.typist = env["typist"] = native = NativeTypist()
+    queue = deferred(env)
+    type_text(env, "ghbdtn")
+    tap(env, kc.KEY_ENTER)
+    assert len(queue) == 1
+    tap(env, kc.KEY_LEFT)
+    drain(queue)
+    assert not native.native and not native.taps()
+    assert env["backend"].current() == US
+
+
+@pytest.mark.parametrize("source,target,group", [
+    ("ghbdtn!", "привет!", US),
+    ("ghbdtn/", "привет.", US),
+    ("ghbdtn?", "привет,", US),
+    ("руддщ!", "hello!", RU),
+    ("руддщ,", "hello?", RU),
+])
+def test_kate_punctuation_native_completion(env, source, target, group):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl.config.general.early_switch = False
+    env["backend"].set(group)
+    ctrl.typist = env["typist"] = native = NativeTypist()
+    type_text(env, source)
+    assert native.native == [(source, target)]
+    assert env["backend"].current() != group
+    assert not native.taps()
+    assert ctrl.buffer.is_empty()
+
+
+@pytest.mark.parametrize("source", ["hello!", "hello/", "hello?", "ghbdtn,", "ghbdtn[",
+                                    "ghbdtn1", "ghbdtn--", "hello/ghbdtn/"])
+def test_kate_punctuation_does_not_guess_letter_or_path(env, source):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl.config.general.early_switch = False
+    ctrl.typist = env["typist"] = native = NativeTypist()
+    type_text(env, source)
+    assert not native.native and not native.taps()
+    assert env["backend"].current() == US
+
+
+@pytest.mark.parametrize("app,enabled,decline", [
+    ("kate", False, False), ("editor", True, False), ("kate", True, True),
+])
+def test_punctuation_never_falls_back_to_keyboard(env, app, enabled, decline):
+    ctrl = env["ctrl"]
+    probe = RenamingEditorProbe(env["clock"])
+    probe.app = app
+    ctrl.set_probe(probe)
+    ctrl.config.general.early_switch = False
+    ctrl.config.general.punct_fix = enabled
+    ctrl.typist = env["typist"] = native = NativeTypist()
+    if decline:
+        native.replace_span = lambda *_: None
+    type_text(env, "ghbdtn!")
+    assert not native.native and not native.taps()
+    assert env["backend"].current() == US
+
+
+def test_punctuation_queue_rejects_later_input(env):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl.config.general.early_switch = False
+    ctrl.typist = env["typist"] = native = NativeTypist()
+    queue = deferred(env)
+    type_text(env, "ghbdtn!")
+    assert len(queue) == 1
+    tap(env, kc.KEY_LEFT)
+    drain(queue)
+    assert not native.native and not native.taps()
+    assert env["backend"].current() == US
+
+
+@pytest.mark.parametrize("source,mark,target,group,shift", [
+    ("ghbdtn", "!", "привет!", US, kc.KEY_LEFTSHIFT),
+    ("ghbdtn", "?", "привет,", US, kc.KEY_RIGHTSHIFT),
+    ("руддщ", "!", "hello!", RU, kc.KEY_RIGHTSHIFT),
+    ("руддщ", ",", "hello?", RU, kc.KEY_LEFTSHIFT),
+])
+def test_kate_punctuation_completes_with_physical_shift_held(
+        env, monkeypatch, source, mark, target, group, shift):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl.config.general.early_switch = False
+    env["backend"].current_index = group
+    monkeypatch.setattr(controller_mod, "RELEASE_WAIT", 0.02)
+    ctrl.typist = env["typist"] = native = NativeTypist()
+    queue = deferred(env)
+    type_text(env, source)
+    code, shifted = env["km"].key_for(mark, group)
+    assert shifted
+    ctrl.on_key(shift, 1, 1)
+    ctrl.on_key(code, 1, 1)
+    ctrl.on_key(code, 0, 1)
+    assert len(queue) == 1
+    drain(queue)
+    assert native.native == [(source + mark, target)]
+    assert env["backend"].current() != group
+    assert ctrl.buffer.held_physical() == {(1, shift)}
+    assert not native.events  # no virtual presses OR modifier releases
+    ctrl.on_key(shift, 0, 1)
+    assert not ctrl.buffer.held_physical()
+
+
+def test_kate_punctuation_held_shift_provider_decline_never_types(env, monkeypatch):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl.config.general.early_switch = False
+    monkeypatch.setattr(controller_mod, "RELEASE_WAIT", 0.02)
+    ctrl.typist = env["typist"] = native = NativeTypist()
+    native.replace_span = lambda *_: None
+    queue = deferred(env)
+    type_text(env, "ghbdtn")
+    ctrl.on_key(kc.KEY_LEFTSHIFT, 1, 1)
+    ctrl.on_key(kc.KEY_1, 1, 1)
+    ctrl.on_key(kc.KEY_1, 0, 1)
+    drain(queue)
+    assert not native.events and not native.native
+    assert env["backend"].current() == US
+    assert ctrl.buffer.held_physical() == {(1, kc.KEY_LEFTSHIFT)}
+    ctrl.on_key(kc.KEY_LEFTSHIFT, 0, 1)
+
+
+def test_kate_punctuation_held_other_printable_key_still_blocks(env, monkeypatch):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl.config.general.early_switch = False
+    monkeypatch.setattr(controller_mod, "RELEASE_WAIT", 0.02)
+    ctrl.typist = env["typist"] = native = NativeTypist()
+    queue = deferred(env)
+    type_text(env, "ghbdt")
+    ctrl.on_key(kc.KEY_N, 1, 2)  # previous letter still held on another keyboard
+    ctrl.on_key(kc.KEY_LEFTSHIFT, 1, 1)
+    ctrl.on_key(kc.KEY_1, 1, 1)
+    ctrl.on_key(kc.KEY_1, 0, 1)
+    assert len(queue) == 1
+    drain(queue)
+    assert not native.events and not native.native
+    assert env["backend"].current() == US
+    ctrl.on_key(kc.KEY_N, 0, 2)
+    ctrl.on_key(kc.KEY_LEFTSHIFT, 0, 1)

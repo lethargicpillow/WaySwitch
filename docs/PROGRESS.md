@@ -1,9 +1,21 @@
 # Состояние проекта
 
-Актуально на **11 ноября 2026 года**. Версия исходников — **1.1.4**.
-[Опубликованные выпуски и пакеты](https://github.com/Wetoshkin/WaySwitch/releases/latest),
-[CI](https://github.com/Wetoshkin/WaySwitch/actions/workflows/ci.yml),
-[сборка и публикация релиза](https://github.com/Wetoshkin/WaySwitch/actions/workflows/release.yml).
+Актуально на **12 ноября 2026 года**. Версия форка — **1.1.5**.
+
+## Проверка 1.1.5 на KDE Plasma / Wayland
+
+На Kubuntu в Kate проверены нативные исправления по пробелу, Enter и
+пунктуации, смешанный ru/en текст и составные слова с дефисами.
+Нативная замена сохраняет символы вне исправляемого диапазона;
+автопарные скобки редактора могут остаться за кареткой. Enter включается
+параметром `general.fix_on_enter`. Пунктуация в отдельных случаях
+исправляется при следующем пробеле или Enter. Остальные приложения
+и окружения этой проверкой не подтверждались.
+
+### История проверок исходной версии 1.1.4
+[Опубликованные выпуски и пакеты](https://github.com/lethargicpillow/WaySwitch/releases/latest),
+[CI](https://github.com/lethargicpillow/WaySwitch/actions/workflows/ci.yml),
+[сборка и публикация релиза](https://github.com/lethargicpillow/WaySwitch/actions/workflows/release.yml).
 Версия исходников, модульные тесты, живые проверки и доступность готового
 релиза — отдельные результаты. Живые проверки ниже выполнены на исходниках
 1.1.4 в прогонах 10–11 ноября 2026 до упаковки; они не означают установку
@@ -342,7 +354,7 @@ uinput-fallback; TypeText и нативная замена Writer не пров�
 по-прежнему передают текст в шину сеанса.
 
 Результаты текущего коммита и сборок DEB, RPM, Arch, Flatpak, AppImage и Nix
-доступны в [CI](https://github.com/Wetoshkin/WaySwitch/actions/workflows/ci.yml).
+доступны в [CI](https://github.com/lethargicpillow/WaySwitch/actions/workflows/ci.yml).
 Проверка AppImage извлекает `.DirIcon` из готового файла и сравнивает его с
 исходным PNG; наличие файла только в дереве сборки недостаточно.
 

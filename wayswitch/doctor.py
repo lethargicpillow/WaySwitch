@@ -164,7 +164,12 @@ def focus_status() -> tuple[bool, str]:
         path = umbriel.find_socket()
         if path is None or umbriel.query_input_locked(umbriel.UmbrielIpc(path)):
             return False, "Umbriel: активное обычное окно не подтверждено; ввод заблокирован"
-    snap = query_focus()
+    if detect_desktop() == KDE:
+        from wayswitch.backends.kwin_focus import query_active_focus
+
+        snap = query_active_focus()
+    else:
+        snap = query_focus()
     names = ", ".join(snap.app_ids)
     detail = f"AT-SPI: {snap.app or 'приложение не определено'}"
     if names:

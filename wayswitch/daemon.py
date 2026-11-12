@@ -6,6 +6,7 @@ import logging
 import signal
 import threading
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 from wayswitch import a11y as cfgmod_a11y
@@ -57,6 +58,11 @@ def _open_uinput() -> UInputTypist:
 
 
 def run(config_path: Path | None, verbose: bool, dry_run: bool) -> int:
+    with ExitStack() as resources:
+        return _run(config_path, verbose, dry_run, resources)
+
+
+def _run(config_path, verbose, dry_run, resources: ExitStack) -> int:
     from gi.repository import GLib
 
     logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO,
@@ -161,11 +167,33 @@ def run(config_path: Path | None, verbose: bool, dry_run: bool) -> int:
         Gio.bus_watch_name(Gio.BusType.SESSION, SHELL_NAME, Gio.BusNameWatcherFlags.NONE,
                            lambda *_: restart("появилось расширение GNOME Shell"), None)
 
+    # В KDE флаг ACTIVE в AT-SPI иногда остаётся у фонового окна.
+    # KWin даёт PID фактического окна; при потере связи не доверяем старому фокусу.
+    kwin_focus = None
+    if backend.name == "kde":
+        from wayswitch.backends.kwin_focus import KWinFocusBridge
+
+        try:
+            kwin_focus = KWinFocusBridge()
+            resources.callback(kwin_focus.close)
+            kwin_focus.start()
+        except Exception as exc:  # noqa: BLE001 — systemd повторит после восстановления KWin
+            log.error("KWin: источник фокуса недоступен (%s)", type(exc).__name__)
+            backend.close()
+            typist.close()
+            return RESTART
+        cfgmod_a11y.set_context_provider(kwin_focus.state.snapshot)
+        resources.callback(cfgmod_a11y.set_context_provider, None)
+        kwin_focus.on_lost = lambda: restart("потеряна связь с KWin")
+        log.info("KWin: активное окно подтверждается по PID")
+
     service: DaemonService | None = None
     # Сведения о фокусе (приложение, поле пароля) нужны и автоисправлению, и
     # ручным жестам: пароль, исправленный двойным Shift, не должен уйти в
     # историю окна. Подписка нужна до запуска приложений, в том числе после простоя.
     probe = cfgmod_a11y.make_probe(enabled=True)
+    if kwin_focus is not None:
+        kwin_focus.on_change = probe.invalidate
     probe.poke()
 
     last_beep = [0.0]

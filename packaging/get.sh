@@ -1,8 +1,8 @@
 #!/bin/sh
 # WaySwitch — установка одной командой для любого дистрибутива:
-#   curl -fsSL https://raw.githubusercontent.com/Wetoshkin/WaySwitch/main/packaging/get.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/lethargicpillow/WaySwitch/v1.1.5/packaging/get.sh | sh
 # Удаление:
-#   curl -fsSL https://raw.githubusercontent.com/Wetoshkin/WaySwitch/main/packaging/get.sh | sh -s -- --uninstall
+#   curl -fsSL https://raw.githubusercontent.com/lethargicpillow/WaySwitch/v1.1.5/packaging/get.sh | sh -s -- --uninstall
 #
 # Запускать от обычного пользователя, не через sudo: пароль спросят только на
 # шаге установки пакета. Без подтверждения ничего не ставится (--yes —
@@ -13,7 +13,7 @@
 
 set -eu
 
-REPO="Wetoshkin/WaySwitch"
+REPO="lethargicpillow/WaySwitch"
 API="https://api.github.com/repos/$REPO/releases?per_page=1"   # включает альфа-релизы, в отличие от /latest
 SOURCE_UNINSTALL=/usr/local/share/wayswitch/uninstall.sh       # кладёт packaging/install.sh
 MODE="install"

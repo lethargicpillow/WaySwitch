@@ -15,7 +15,7 @@ from wayswitch.gui import gesture_keys, texts
 from wayswitch.gui.widgets import boxed_list, clear_list, keycap, keycaps, run_in_thread
 from wayswitch.i18n import gettext as _
 
-REPO_URL = "https://github.com/Wetoshkin/WaySwitch"
+REPO_URL = "https://github.com/lethargicpillow/WaySwitch"
 
 
 # --- клавиша исправления -----------------------------------------------------------

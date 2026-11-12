@@ -35,7 +35,7 @@ def test_future_versions_keep_normal_order(candidate, current, expected):
     assert updates.is_newer(candidate, current) is expected
 
 
-TAG = "https://github.com/Wetoshkin/WaySwitch/releases/tag/"
+TAG = "https://github.com/lethargicpillow/WaySwitch/releases/tag/"
 RELEASES = [
     {"tag_name": "v2.1.0a1", "prerelease": True, "html_url": TAG + "v2.1.0a1"},
     {"tag_name": "v2.0.1", "prerelease": False, "html_url": TAG + "v2.0.1", "body": "заметки"},
@@ -159,7 +159,7 @@ def test_update_request_sends_only_release_url_and_public_headers(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", receive)
     assert updates.fetch_latest("2.0.0", timeout=1.0) is None
     assert sent == [(
-        "https://api.github.com/repos/Wetoshkin/WaySwitch/releases?per_page=20",
+        "https://api.github.com/repos/lethargicpillow/WaySwitch/releases?per_page=20",
         "GET", None, {"Accept": "application/vnd.github+json",
                       "User-agent": f"WaySwitch/{__version__}"}, 1.0,
     )]

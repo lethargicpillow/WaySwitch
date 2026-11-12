@@ -15,7 +15,7 @@ from functools import cached_property
 from importlib import resources
 from pathlib import Path
 
-from wayswitch import ngram
+from wayswitch import lexicon, ngram
 from wayswitch.keymap import CYRILLIC, LATIN, Keymap
 
 LANG_OF_ALPHABET = {"ru": "ru", "latin": "en"}
@@ -152,7 +152,11 @@ class LanguageModel:
         with gzip.open(base / f"{lang}.words.gz", "rt", encoding="utf-8") as f:
             for line in f:
                 words.append(line.split("\t", 1)[0])
-        return cls(lang, words, words[:top_n], ngram.load(base / f"{lang}.ngrams.json.gz"))
+        # Keep corpus order/frequencies intact; supplement only dictionary lookup.
+        extra = lexicon.WORDS.get(lang, frozenset())
+        short = lexicon.SHORT.get(lang, frozenset())
+        return cls(lang, set(words) | extra, set(words[:top_n]) | short,
+                   ngram.load(base / f"{lang}.ngrams.json.gz"))
 
     def _lookup_key(self, text: str) -> str:
         """Ключ поиска: в ru «ё» и «е» равнозначны, в en — только регистр."""
@@ -552,7 +556,15 @@ class Detector:
                 or al.startswith(TECH_PREFIXES) or a.core.lower() in TECH_WORDS:
             return keep("tech")
         if 2 <= len(a.core) < 5 and a.core.isupper():
-            return keep("abbrev")
+            # Uppercase prose is not necessarily an acronym. Permit only
+            # unambiguous, known ordinary target words; the normal dictionary,
+            # exception and short-word rules below still decide the correction.
+            ordinary_target = (sens != SENSITIVITY["conservative"]
+                               and not a.in_dict and b.valid and b.in_dict
+                               and b.core.isupper()
+                               and b.core.lower() in lexicon.UPPERCASE_WORDS[b.lang])
+            if not ordinary_target:
+                return keep("abbrev")
         if a.core.lower() in self.exceptions:
             return keep("exception")
 
@@ -562,16 +574,50 @@ class Detector:
 
         # 5. Словарь.
         if a.valid and a.in_dict:
+            # Explicit short collisions, not a general bypass of dict-a.
+            # The previous accepted word must already establish Russian context.
+            if (sens != SENSITIVITY["conservative"] and b.valid and b.in_dict
+                    and a.lang == "en" and b.lang == "ru" and context[-1] == "ru"
+                    and a.text == a.text.lower()
+                    and lexicon.RU_CONTEXT_COLLISIONS.get(a.text.lower()) == b.core.lower()):
+                return fix("dict-short-context", 0.8)
+            if (sens != SENSITIVITY["conservative"] and b.valid and b.in_dict
+                    and a.lang == "en" and b.lang == "ru"
+                    and context != ("en", "en")
+                    and lexicon.RU_LOWERCASE_COLLISIONS.get(a.text) == b.core.lower()):
+                return fix("dict-short-context", 0.8)
             return keep("dict-a", 1.0)
+        # A compound need not be an independent corpus entry. Keep exact
+        # known source components before considering the other layout.
+        def compound_parts(hyp):
+            if not hyp.valid or "-" not in hyp.core:
+                return []
+            parts = hyp.core.lower().split("-")
+            if not all(len(part) >= 2 and all(ch in LETTERS[hyp.lang] for ch in part)
+                       for part in parts):
+                return []
+            return [self.models[hyp.lang].is_word(part) for part in parts]
+
+        a_parts, b_parts = compound_parts(a), compound_parts(b)
+        if a_parts and all(a_parts):
+            return keep("dict-compound-a", 1.0)
         short = len(b.core) < sens.min_length
         if b.valid and b.in_dict and not short:
             return fix("dict-b", 1.0)
+        if b_parts and all(b_parts) and not any(a_parts):
+            return fix("dict-compound-b", 1.0)
+        # An unknown source component alongside a known one may be a project
+        # name or identifier. Do not use the new compound rule to override it;
+        # the ordinary n-gram policy below remains unchanged.
 
         # 8. Короткие слова — только частотные и только в контексте своего языка.
         if short:
-            if b.valid and b.core.lower() in self.models[b.lang].top and not a.in_dict \
-                    and context[-1] in (None, b.lang):
-                return fix("dict-short", 0.8)
+            if b.valid and b.core.lower() in self.models[b.lang].top and not a.in_dict:
+                if context[-1] in (None, b.lang):
+                    return fix("dict-short", 0.8)
+                if (sens != SENSITIVITY["conservative"]
+                        and b.core.lower() in lexicon.TRANSITION_SHORT.get(b.lang, ())):
+                    return fix("dict-short-transition", 0.8)
             return keep("short")
 
         # 6–7. N-граммы.

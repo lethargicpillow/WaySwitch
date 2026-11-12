@@ -66,6 +66,7 @@ class Plan:
     # Привязка буфера к полю не была подтверждена до первого символа: писать
     # клавишами нельзя, только проверяемая замена диапазона.
     require_verified: bool = False
+    native_after_enter: bool = False
 
 
 class KeyTypist(Protocol):
@@ -163,7 +164,7 @@ class _Run:
     def __init__(self, backend, abort: Callable[[], bool], restore_group: int | None,
                  hold: Callable[[], bool] | None, stop: Callable[[], bool],
                  before_write: Callable[[], bool] | None, native_append=None,
-                 native_focus=None):
+                 native_focus=None, before_fallback=None):
         self.backend = backend
         self._abort = abort
         self._stop = stop
@@ -171,6 +172,7 @@ class _Run:
         self._before_write = before_write
         self.native_append = native_append
         self.native_focus = native_focus
+        self._before_fallback = before_fallback
         self.write_checked = before_write is None
         self._gave_up = False  # после точки невозврата ждём Shift один раз
         self.restore_group = restore_group
@@ -178,13 +180,23 @@ class _Run:
         self.caps_toggle: Callable[[], None] | None = None  # чем вернуть Caps Lock
         self.committed = False  # текст или новый режим уже использован, откат небезопасен
         self.native_done = False
+        self.transport = "none"
+        self.native_status = "not-attempted"
+        self.stage = "preflight"
+        self.abort_reason = "none"
         self.fast_switch = False  # native-запись не печатает клавишами: клиентский settle не нужен
         self.resolved_source: str | None = None
         self.resolved_target: str | None = None
 
     def aborted(self) -> bool:
         # _abort прокручивает GLib: и после первого Backspace нужны события lock/layout.
-        return (self._abort() and not self.committed) or self._stop()
+        if self._abort() and not self.committed:
+            self.abort_reason = "physical-input"
+            return True
+        if self._stop():
+            self.abort_reason = "stop-guard"
+            return True
+        return False
 
     def interruption(self, *, check_hold: bool = False,
                      virtual_modifiers: bool = False) -> str | None:
@@ -198,8 +210,11 @@ class _Run:
             if interrupted and (self.switched or self.caps_toggle is not None
                                 or virtual_modifiers):
                 self.commit()
-        return (FAILED if self.committed else ABORTED) if (
-            blocked or interrupted or stopped) else None
+        if blocked or interrupted or stopped:
+            self.abort_reason = ("stop-guard" if stopped else
+                                 "physical-input" if interrupted else "held-key")
+            return FAILED if self.committed else ABORTED
+        return None
 
     def commit(self) -> None:
         self.committed = True
@@ -223,7 +238,10 @@ class _Run:
             # После проверенного якоря обычная печать идёт за диапазоном, а не в нём.
             # Опасные клавиши выставляют _stop; неизвестный ввод до якоря сюда не доходит.
             return False
-        return (interrupted and (before_write or not self.committed)) or stopped
+        if stopped or (interrupted and (before_write or not self.committed)):
+            self.abort_reason = "stop-guard" if stopped else "physical-input"
+            return True
+        return False
 
     def blocked(self) -> bool:
         """Перед стирающей или печатающей клавишей: зажат физический Shift.
@@ -240,6 +258,13 @@ class _Run:
             self._gave_up = True
             return False
         return True
+
+    def fallback_ready(self) -> bool:
+        if self._before_fallback is None or self._before_fallback():
+            return True
+        self.stage = "fallback-release"
+        self.abort_reason = "held-key"
+        return False
 
     def switch(self, group: int, timeout: float) -> bool:
         self.switched = True
@@ -312,13 +337,14 @@ def execute(plan: Plan, typist, backend, abort: Callable[[], bool] = lambda: Fal
             hold: Callable[[], bool] | None = None,
             outcome: dict | None = None, stop: Callable[[], bool] = lambda: False,
             before_write: Callable[[], bool] | None = None, native_append=None,
-            native_focus=None) -> str:
+            native_focus=None, before_fallback=None) -> str:
     """before_write проверяется один раз перед первой записью, после ожиданий.
 
     outcome (если передан) получает caps_off: Caps Lock в итоге выключен нами.
     """
+    started = time.monotonic()
     run = _Run(backend, abort, restore_group, hold, stop, before_write, native_append,
-               native_focus)
+               native_focus, before_fallback)
     if isinstance(typist, TextTypist):
         result = _execute_text(plan, typist, run, switch_timeout)
     else:
@@ -327,6 +353,10 @@ def execute(plan: Plan, typist, backend, abort: Callable[[], bool] = lambda: Fal
         run.rollback()
     if outcome is not None:
         outcome["caps_off"] = run.caps_toggle is not None
+        outcome.update(transport=run.transport, native_status=run.native_status,
+                       stage=run.stage, abort_reason=run.abort_reason,
+                       execute_ms=round((time.monotonic() - started) * 1000),
+                       committed=run.committed)
         if run.native_done:
             outcome["native_span"] = True
             if run.resolved_source is not None:
@@ -361,13 +391,24 @@ def _attempt_native(plan: Plan, typist, run: _Run, setup,
     если native-возможность не подтвердилась.
     """
     replace = getattr(typist, "replace_span", None)
+    if plan.native_after_enter and (plan.focus is None or plan.focus.app != "kate"
+                                    or not plan.require_verified):
+        run.abort_reason = "enter-native-only"
+        return ABORTED
     shape = _native_shape(plan)
     if replace is None or shape is None:
+        run.native_status = "no-provider" if replace is None else "no-span"
         return _NATIVE_FALLBACK
+    run.transport = "native"
+    run.stage = "native-preflight"
+    run.native_status = "attempted"
     prefix, backspace, typed = shape
     if len(plan.source_text) != backspace.count:
+        run.abort_reason = "span-length"
         return ABORTED
     if (precheck_hold and run.blocked()) or run.aborted():
+        if run.abort_reason == "none":
+            run.abort_reason = "held-key"
         return ABORTED
     setup_done = False
     prepared = False
@@ -393,6 +434,7 @@ def _attempt_native(plan: Plan, typist, run: _Run, setup,
         return True
 
     stop = _NativeStop(run, prepare)
+    stop.after_enter = plan.native_after_enter
 
     def begin():
         nonlocal prepared, started
@@ -407,12 +449,14 @@ def _attempt_native(plan: Plan, typist, run: _Run, setup,
         prepared = True
         return True
 
+    run.stage = "native-replace"
     try:
         result = replace(plan.focus, plan.source_text, typed.text, begin, stop)
     except Exception as exc:  # noqa: BLE001 — ошибка native-протокола не откатывает на клавиши
         log.error("исправление прервано ошибкой: %s", type(exc).__name__)
         return FAILED
     if result is None:
+        run.native_status = "provider-declined"
         # Ни один шаг подготовки не начат — можно использовать обычный транспорт.
         if (run.committed or run.switched or run.caps_toggle is not None
                 or started or stop.anchor_reserved):
@@ -420,6 +464,7 @@ def _attempt_native(plan: Plan, typist, run: _Run, setup,
         if (precheck_hold and run.blocked()) or run.aborted():
             return ABORTED
         return _NATIVE_FALLBACK
+    run.native_status = result.status
     run.committed |= result.committed
     if result.status == DONE and not prepared:
         return FAILED
@@ -454,8 +499,14 @@ def _execute_keys(plan: Plan, typist, run: _Run, key_delay: float, sleep,
         if native_result is not _NATIVE_FALLBACK:
             return native_result
         if plan.require_verified:
+            run.abort_reason = "verified-required"
+            run.stage = "fallback-blocked"
             return ABORTED  # сомнительная привязка: клавишами чужой текст не трогаем
+        if not run.fallback_ready():
+            return ABORTED
+        run.transport = "keyboard"
         for step in plan.steps:
+            run.stage = type(step).__name__
             if status := interruption():
                 return status
             if isinstance(step, ReleaseModifiers):
@@ -560,8 +611,14 @@ def _execute_text(plan: Plan, typist: TextTypist, run: _Run, switch_timeout: flo
         if native_result is not _NATIVE_FALLBACK:
             return native_result
         if plan.require_verified:
+            run.abort_reason = "verified-required"
+            run.stage = "fallback-blocked"
             return ABORTED  # сомнительная привязка: клавишами чужой текст не трогаем
+        if not run.fallback_ready():
+            return ABORTED
+        run.transport = "text"
         for step in plan.steps:
+            run.stage = type(step).__name__
             if status := run.interruption(check_hold=isinstance(step, (Backspace, Type))):
                 return status
             if isinstance(step, (Backspace, Type)) and not run.write_checked:
