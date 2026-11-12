@@ -163,7 +163,7 @@ class _Run:
     def __init__(self, backend, abort: Callable[[], bool], restore_group: int | None,
                  hold: Callable[[], bool] | None, stop: Callable[[], bool],
                  before_write: Callable[[], bool] | None, native_append=None,
-                 native_focus=None):
+                 native_focus=None, before_fallback=None):
         self.backend = backend
         self._abort = abort
         self._stop = stop
@@ -171,6 +171,7 @@ class _Run:
         self._before_write = before_write
         self.native_append = native_append
         self.native_focus = native_focus
+        self._before_fallback = before_fallback
         self.write_checked = before_write is None
         self._gave_up = False  # после точки невозврата ждём Shift один раз
         self.restore_group = restore_group
@@ -257,6 +258,13 @@ class _Run:
             return False
         return True
 
+    def fallback_ready(self) -> bool:
+        if self._before_fallback is None or self._before_fallback():
+            return True
+        self.stage = "fallback-release"
+        self.abort_reason = "held-key"
+        return False
+
     def switch(self, group: int, timeout: float) -> bool:
         self.switched = True
         self.backend.set(group)
@@ -328,14 +336,14 @@ def execute(plan: Plan, typist, backend, abort: Callable[[], bool] = lambda: Fal
             hold: Callable[[], bool] | None = None,
             outcome: dict | None = None, stop: Callable[[], bool] = lambda: False,
             before_write: Callable[[], bool] | None = None, native_append=None,
-            native_focus=None) -> str:
+            native_focus=None, before_fallback=None) -> str:
     """before_write проверяется один раз перед первой записью, после ожиданий.
 
     outcome (если передан) получает caps_off: Caps Lock в итоге выключен нами.
     """
     started = time.monotonic()
     run = _Run(backend, abort, restore_group, hold, stop, before_write, native_append,
-               native_focus)
+               native_focus, before_fallback)
     if isinstance(typist, TextTypist):
         result = _execute_text(plan, typist, run, switch_timeout)
     else:
@@ -488,6 +496,8 @@ def _execute_keys(plan: Plan, typist, run: _Run, key_delay: float, sleep,
             run.abort_reason = "verified-required"
             run.stage = "fallback-blocked"
             return ABORTED  # сомнительная привязка: клавишами чужой текст не трогаем
+        if not run.fallback_ready():
+            return ABORTED
         run.transport = "keyboard"
         for step in plan.steps:
             run.stage = type(step).__name__
@@ -598,6 +608,8 @@ def _execute_text(plan: Plan, typist: TextTypist, run: _Run, switch_timeout: flo
             run.abort_reason = "verified-required"
             run.stage = "fallback-blocked"
             return ABORTED  # сомнительная привязка: клавишами чужой текст не трогаем
+        if not run.fallback_ready():
+            return ABORTED
         run.transport = "text"
         for step in plan.steps:
             run.stage = type(step).__name__

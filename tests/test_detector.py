@@ -250,12 +250,12 @@ def test_language_model_load_real_data():
 
 @pytest.mark.parametrize("target,group", [
     ("THE", US), ("THEY", US), ("KATE", US), ("ВОТ", RU),
-    ("НО", RU), ("NO", US),
+    ("НО", RU), ("NO", US), ("ТЕСТ", RU),
 ])
 def test_uppercase_prose_is_not_an_abbreviation(det, target, group):
     # Use a controlled vocabulary to isolate the all-caps gate from corpus
     # coverage and the existing short-word context policy.
-    ru = [("вот", 2000.0), ("но", 2000.0)] + RU_WORDS
+    ru = [("вот", 2000.0), ("но", 2000.0), ("тест", 2000.0)] + RU_WORDS
     en = [("they", 2000.0), ("kate", 2000.0), ("no", 2000.0)] + EN_WORDS
     det.models["ru"] = LanguageModel.from_words("ru", ru, RU_ALPHABET, top_n=10)
     det.models["en"] = LanguageModel.from_words("en", en, EN_ALPHABET, top_n=10)

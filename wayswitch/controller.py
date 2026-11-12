@@ -30,7 +30,7 @@ from wayswitch.actuator import (
 from wayswitch.buffer import InputBuffer, KeyPress
 from wayswitch.config import Config, apps_path
 from wayswitch.detector import SENSITIVITY, Detector
-from wayswitch.editable import _libreoffice_component
+from wayswitch.editable import _kate, _libreoffice_component
 from wayswitch.gesture import ShiftGesture, TapKeyGesture
 from wayswitch.selection import convert as convert_selection
 from wayswitch.textops import number_words, transliterate
@@ -1647,6 +1647,13 @@ class Controller:
                 if done is not None:
                     done(ok, outcome.get("secret", secret))
                 self._run_pending_gesture()
+                replay_word = outcome.get("replay_word")
+                if (ok and replay_word is not None and not self.busy and not self._pending
+                        and not self._skip_word and self._auto_allowed()
+                        and self.backend.current() == target_group and self._sync_focus()
+                        and self.buffer.last_word_with_tail() == (replay_word[0], 1)):
+                    log.debug("обработка завершённого слова после native-replay")
+                    self._on_word(*replay_word)
 
         self.schedule(run)
 
@@ -1840,6 +1847,19 @@ class Controller:
         secret = secret or self._secret_focus()
         outcome["secret"] = secret
         expired_phrase = False
+        # Native Kate proves the exact source span and never synthesizes a space.
+        # Only the keyboard fallback needs the physical space to be released.
+        native_space = (not manual and not whole_phrase and not span and not caps_off
+                        and tail == 1 and switch and trigger is not None
+                        and trigger[1] == kc.KEY_SPACE and _kate(plan.focus)
+                        and callable(getattr(self.typist, "replace_span", None)))
+
+        def wait_trigger_for_fallback() -> bool:
+            begin = time.monotonic()
+            ready = self._wait_trigger_release(trigger)
+            outcome["release_ms"] = outcome.get("release_ms", 0) + round(
+                (time.monotonic() - begin) * 1000)
+            return ready
 
         def before_write() -> bool:
             # Между решением и первой стирающей клавишей прошли ожидание
@@ -1880,7 +1900,7 @@ class Controller:
             if not blocked:
                 outcome["stage"] = "wait-release"
                 blocked = not self._wait_release(trigger)
-            if not blocked:
+            if not blocked and not native_space:
                 outcome["stage"] = "wait-trigger-release"
                 blocked = not self._wait_trigger_release(trigger)
             outcome["release_ms"] = round((time.monotonic() - release_started) * 1000)
@@ -1896,7 +1916,8 @@ class Controller:
                                  hold=self._wait_shift_released, outcome=outcome, stop=self._stop,
                                  native_append=self._native_append_count,
                                  native_focus=self._native_focus_snapshot,
-                                 before_write=before_write if whole_phrase else None)
+                                 before_write=before_write if whole_phrase else None,
+                                 before_fallback=wait_trigger_for_fallback if native_space else None)
         except Exception as exc:  # noqa: BLE001 — execute сам ловит, это страховка
             log.error("исправление %s: ошибка %s", reason, type(exc).__name__)
             result = "failed"
@@ -2023,10 +2044,21 @@ class Controller:
         if replay:
             # Текст уже в приложении; восстанавливаем только учёт нажатий и отмену.
             self.buffer.restore_held(self._busy_held)
+            next_word = None
             for code, value, device_id in busy_keys:
                 event = self.buffer.feed(code, value, device_id, self.clock())
-                if event is not None and event.kind == "word":
-                    self._remember_fix_word(event.keys)
+                if event is not None:
+                    if event.reset_before or event.kind == "reset":
+                        self._clear_context()
+                    next_word = ((list(event.keys), device_id, code)
+                                 if event.kind == "word" else None)
+                    if next_word is not None:
+                        self._remember_fix_word(event.keys)
+            # Do not revisit earlier words: only the last complete word at the
+            # caret is eligible, after the previous correction's done callback.
+            if (not manual and next_word is not None
+                    and self.buffer.last_word_with_tail() == (next_word[0], 1)):
+                outcome["replay_word"] = next_word
         if self.on_fixed:
             self.on_fixed(manual)
         if self.on_corrected and not secret and not self._secret_focus():

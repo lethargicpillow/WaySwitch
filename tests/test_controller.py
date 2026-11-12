@@ -1977,3 +1977,75 @@ def test_phrase_expiring_during_layout_ack_never_writes_text(env, native):
     assert not env["typist"].taps()
     assert not env["corrected"]
     assert ctrl.stats["manual"] == 0
+
+
+def test_kate_native_space_can_replace_before_physical_key_up(env):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl, _, queue, trigger = start_held_trigger_fix(env, "ghbdtn", US)
+
+    class WhileHeld(NativeTypist):
+        def replace_span(self, focus, source, target, begin, stop):
+            assert trigger in ctrl.buffer.held_physical()
+            return super().replace_span(focus, source, target, begin, stop)
+
+    ctrl.typist = env["typist"] = native = WhileHeld()
+    drain(queue)
+    assert native.native == [("ghbdtn ", "привет ")]
+    assert native.taps() == []
+    assert trigger in ctrl.buffer.held_physical()
+    release_key(ctrl, trigger)
+
+
+def test_kate_native_fallback_still_waits_for_physical_space(env):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl, typist, queue, trigger = start_held_trigger_fix(env, "ghbdtn", US)
+    attempted = []
+
+    def decline(*args):
+        assert trigger in ctrl.buffer.held_physical()
+        attempted.append(True)
+        return None
+
+    typist.replace_span = decline
+
+    def pump():
+        if attempted and trigger in ctrl.buffer.held_physical():
+            release_key(ctrl, trigger)
+
+    ctrl.pump = pump
+    drain(queue)
+    assert attempted == [True]
+    assert typist.suppressed == []
+    assert env["corrected"] == [("ghbdtn", "привет", False)]
+    assert typed_text(env).endswith("привет ")
+
+
+def test_native_replay_reconsiders_last_completed_word(env):
+    ctrl = env["ctrl"]
+    ctrl.set_probe(RenamingEditorProbe(env["clock"]))
+    ctrl.config.general.early_switch = False
+    queue = deferred(env)
+
+    class AppendingNative(NativeTypist):
+        def replace_span(self, focus, source, target, begin, stop):
+            from wayswitch.editable import SpanResult
+            assert begin()
+            self.native.append((source, target))
+            if len(self.native) == 1:
+                # Current layout has already changed to RU. The next word
+                # is hello typed in that layout while the native fix runs.
+                for ch in "руддщ ":
+                    code, shift = env["km"].key_for(ch, RU)
+                    assert not shift
+                    ctrl.on_key(code, 1, 2)
+                    ctrl.on_key(code, 0, 2)
+            return SpanResult("done", True)
+
+    ctrl.typist = env["typist"] = native = AppendingNative()
+    type_text(env, "ghbdtn ")
+    drain(queue)
+    assert native.native == [("ghbdtn ", "привет "), ("руддщ ", "hello ")]
+    assert env["corrected"] == [("ghbdtn", "привет", False), ("руддщ", "hello", False)]
+    assert native.taps() == []
