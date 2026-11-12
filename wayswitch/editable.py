@@ -238,13 +238,26 @@ def _replace(tree, focus, source, target, commit, stopped, events) -> SpanResult
                             anchor=anchor)
 
 
-def _prepare_anchor(tree, focus, source, stopped):
+def _prepare_anchor(tree, focus, source, stopped, verify=None):
     caret = tree.caret(focus.field)
     count = tree.character_count(focus.field)
     if (type(caret) is not int or type(count) is not int
             or caret < len(source) or count < caret):
         return None
     physical_base = _physical_count(stopped)
+    if verify is not None:
+        # Ordinary Qt editors: prove the exact span BEFORE changing the layout.
+        # A stale buffer or a late physical keystroke must not change the layout.
+        if physical_base is None or not _span(source) or not verify():
+            return None
+        actual = tree.text_range(focus.field, caret - len(source), caret)
+        if (not _span(actual) or len(actual) != len(source)
+                or actual.casefold() != source.casefold()):
+            return None
+        if (not verify() or tree.caret(focus.field) != caret
+                or tree.character_count(focus.field) != count
+                or _physical_count(stopped) != physical_base or stopped()):
+            return None
     fast = getattr(stopped, "use_fast_switch", None)
     if callable(fast):
         fast()
@@ -295,6 +308,7 @@ def _replace_checked(tree, focus, source, target, commit, stopped, events, safe,
             return SpanResult("aborted")
 
         eventless = _libreoffice_component(focus) == "calc"
+        kate = _kate(focus)
 
         def confirmed(first, before, after, kind, size, initial_count):
             if not safe():
@@ -310,12 +324,20 @@ def _replace_checked(tree, focus, source, target, commit, stopped, events, safe,
             else:
                 return False
             changes = events[first:]
-            if eventless:
+            if eventless or kate:
                 # Редактор Calc не даёт достоверных object:text-changed: события
                 # могут отсутствовать или не совпадать с диапазоном. Доказываем
                 # точным чтением результата, независимым счётчиком физического
                 # ввода и арифметикой счётчика/каретки от якоря.
                 if not safe() or stopped() or physical_base is None or n2 is None:
+                    return False
+                if kate and changes and not (
+                        _edits(changes, before, after, start, kind, size,
+                               initial_count, current_count)
+                        or _append_edits(changes, start, len(source), len(target), kind,
+                                         n2 - physical_base, anchor_count, anchor_caret,
+                                         current_count, current_caret)):
+                    # Kate can omit an event, but contradictory events are not proof.
                     return False
                 final_count, final_caret = tree.character_count(node), tree.caret(node)
                 last_physical = _physical_count(stopped)
@@ -412,10 +434,15 @@ def _writer_window(focus) -> bool:
     return _libreoffice_component(focus) == "writer"
 
 
-def _kde_identity(focus) -> bool:
+def _kate(focus) -> bool:
     return (isinstance(focus, a11y.FocusSnapshot) and type(focus.app) is str
-            and focus.app.casefold() in KDE_APPS
-            and _libreoffice_component(focus) in {"writer", "calc"})
+            and focus.app.casefold() == "kate")
+
+
+def _kde_identity(focus) -> bool:
+    return (_kate(focus) or (isinstance(focus, a11y.FocusSnapshot)
+            and type(focus.app) is str and focus.app.casefold() in KDE_APPS
+            and _libreoffice_component(focus) in {"writer", "calc"}))
 
 
 def _kde_field(field) -> bool:
@@ -467,7 +494,9 @@ def _kde_guard(tree, focus, context, stopped):
             if not (bool(state) and a11y._state_bit(state, a11y.EDITABLE)
                     and a11y._state_bit(state, a11y.FOCUSED)):
                 return _ABORT
-            if interfaces is None or a11y.TEXT not in interfaces or EDITABLE not in interfaces:
+            if interfaces is None or a11y.TEXT not in interfaces:
+                return _ABORT
+            if EDITABLE not in interfaces and not _kate(focus):
                 return _ABORT
             if type(input_type) is not str or input_type == "password":
                 return _ABORT
@@ -487,6 +516,10 @@ def _kde_guard(tree, focus, context, stopped):
                 return _ABORT
             if not 0 <= time.monotonic() - started <= a11y.MAX_AGE_SEC:
                 return _ABORT
+            # Kate exposes its KTextEditor document as role TEXT (61).
+            # Only a verified EditableText provider permits native range writes.
+            if _kate(focus):
+                return _OK if role == 61 and EDITABLE in interfaces else _UNSUPPORTED
             # Доверие продлевает только свежий снимок в начале следующей проверки.
             return _UNSUPPORTED if role in {61, 79} else _OK
         except Exception:  # noqa: BLE001 — unknown metadata cannot authorize a read
@@ -496,11 +529,11 @@ def _kde_guard(tree, focus, context, stopped):
 
 
 def try_replace_kde(focus, source, target, commit, stopped) -> SpanResult | None:
-    """KDE-вход: нативный span для подтверждённого редактора Writer или Calc."""
+    """KDE: verified span replacement in Writer, Calc or Kate."""
     if not isinstance(focus, a11y.FocusSnapshot):
         return SpanResult("aborted")
     if not _kde_identity(focus):
-        # Не LibreOffice: обычный транспорт должен работать как раньше.
+        # Other applications retain the original keyboard transport.
         return None if focus.app else SpanResult("aborted")
     if not _kde_focus(focus, time.monotonic()):
         return SpanResult("aborted")
@@ -511,6 +544,10 @@ def try_replace_kde(focus, source, target, commit, stopped) -> SpanResult | None
     if (context is None or context.protected()
             or (context != a11y.ShellContext()
                 and not (context.pid > 0 and context.window_epoch >= 0))):
+        return SpanResult("aborted")
+    kate = _kate(focus)
+    if kate and (context.pid <= 0 or context.window_epoch < 0 or context.app_ids
+                 or not _span(source) or not _span(target)):
         return SpanResult("aborted")
     connection = None
     attempted = False
@@ -536,7 +573,8 @@ def try_replace_kde(focus, source, target, commit, stopped) -> SpanResult | None
             return None
         if state != _OK:
             return SpanResult("aborted")
-        anchor = _prepare_anchor(tree, focus, source, stopped)
+        anchor = _prepare_anchor(tree, focus, source, stopped,
+                                 verify=(lambda: check() == _OK) if kate else None)
         if anchor is None:
             return SpanResult("aborted")
         with _text_changes(connection, focus.field) as events:
