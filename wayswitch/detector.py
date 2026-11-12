@@ -571,7 +571,7 @@ class Detector:
             if (sens != SENSITIVITY["conservative"] and b.valid and b.in_dict
                     and a.lang == "en" and b.lang == "ru" and context[-1] == "ru"
                     and a.text == a.text.lower()
-                    and lexicon.RU_CONTEXT_COLLISIONS.get(a.core.lower()) == b.core.lower()):
+                    and lexicon.RU_CONTEXT_COLLISIONS.get(a.text.lower()) == b.core.lower()):
                 return fix("dict-short-context", 0.8)
             return keep("dict-a", 1.0)
         short = len(b.core) < sens.min_length

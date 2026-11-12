@@ -37,7 +37,8 @@ def test_conversation_english(detector, word):
 
 
 @pytest.mark.parametrize("word,target", [("bp", "из"), ("oj", "що"), ("lf", "да"),
-                                         ("lj", "до"), ("rj", "ко")])
+                                         ("lj", "до"), ("rj", "ко"), ("j,", "об"),
+                                         ("x`", "чё"), ("g;", "пж")])
 def test_short_collisions_require_target_context(detector, word, target):
     keys = keys_for_text(detector.keymap, word, US)
     assert detector.decide(keys, US, RU, (None, None)).action == "keep"
